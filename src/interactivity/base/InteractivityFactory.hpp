@@ -8,6 +8,7 @@
 #include "ApiDetector.hpp"
 
 #include "../inc/IInteractivityFactory.hpp"
+#include "PseudoConsoleWindowAccessibilityProvider.hpp"
 
 #include <map>
 
@@ -23,11 +24,12 @@ namespace Microsoft::Console::Interactivity
 
         [[nodiscard]] NTSTATUS CreateHighDpiApi(_Inout_ std::unique_ptr<IHighDpiApi>& api);
         [[nodiscard]] NTSTATUS CreateWindowMetrics(_Inout_ std::unique_ptr<IWindowMetrics>& metrics);
-        [[nodiscard]] NTSTATUS CreateAccessibilityNotifier(_Inout_ std::unique_ptr<IAccessibilityNotifier>& notifier);
         [[nodiscard]] NTSTATUS CreateSystemConfigurationProvider(_Inout_ std::unique_ptr<ISystemConfigurationProvider>& provider);
 
-        [[nodiscard]] NTSTATUS CreatePseudoWindow(HWND& hwnd, const HWND owner);
-        void SetPseudoWindowCallback(std::function<void(bool)> func);
+        [[nodiscard]] NTSTATUS CreatePseudoWindow(HWND& hwnd);
+
+        void SetOwner(HWND owner) noexcept;
+        void SetVisibility(const bool isVisible) noexcept;
 
         // Wndproc
         [[nodiscard]] static LRESULT CALLBACK s_PseudoWindowProc(_In_ HWND hwnd,
@@ -41,6 +43,10 @@ namespace Microsoft::Console::Interactivity
 
     private:
         void _WritePseudoWindowCallback(bool showOrHide);
-        std::function<void(bool)> _pseudoWindowMessageCallback;
+
+        HWND _pseudoConsoleWindowHwnd{ nullptr };
+        std::atomic<HWND> _owner{ HWND_DESKTOP };
+        std::atomic<bool> _suppressVisibilityChange{ false };
+        WRL::ComPtr<PseudoConsoleWindowAccessibilityProvider> _pPseudoConsoleUiaProvider{ nullptr };
     };
 }

@@ -6,7 +6,7 @@ Module Name:
 - IDynamicProfileGenerator
 
 Abstract:
-- The DynamicProfileGenerator interface. A dynamic profile generator is a object
+- The DynamicProfileGenerator interface. A dynamic profile generator is an object
   that can synthesize a list of profiles based on some arbitrary, typically
   external criteria. Profiles from dynamic sources are only available in the
   user's profiles if the generator actually ran and created the profile.
@@ -28,8 +28,10 @@ namespace winrt::Microsoft::Terminal::Settings::Model
     class IDynamicProfileGenerator
     {
     public:
-        virtual ~IDynamicProfileGenerator(){};
+        virtual ~IDynamicProfileGenerator() = default;
         virtual std::wstring_view GetNamespace() const noexcept = 0;
+        virtual std::wstring_view GetDisplayName() const noexcept = 0;
+        virtual std::wstring_view GetIcon() const noexcept = 0;
         virtual void GenerateProfiles(std::vector<winrt::com_ptr<implementation::Profile>>& profiles) const = 0;
     };
 };

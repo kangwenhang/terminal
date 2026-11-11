@@ -5,17 +5,10 @@
 #include "ControlInteractivity.h"
 #include <DefaultSettings.h>
 #include <unicode.hpp>
-#include <Utf16Parser.hpp>
 #include <Utils.h>
-#include <LibraryResources.h>
 #include "../../types/inc/GlyphWidth.hpp"
 #include "../../types/inc/Utils.hpp"
 #include "../../buffer/out/search.h"
-
-#include "InteractivityAutomationPeer.h"
-
-#include "ControlInteractivity.g.cpp"
-#include "TermControl.h"
 
 using namespace ::Microsoft::Console::Types;
 using namespace ::Microsoft::Console::VirtualTerminal;
@@ -28,6 +21,8 @@ static constexpr unsigned int MAX_CLICK_COUNT = 3;
 
 namespace winrt::Microsoft::Terminal::Control::implementation
 {
+    std::atomic<uint64_t> ControlInteractivity::_nextId{ 1 };
+
     static constexpr TerminalInput::MouseButtonState toInternalMouseState(const Control::MouseButtonState& state)
     {
         return TerminalInput::MouseButtonState{
@@ -39,13 +34,64 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
     ControlInteractivity::ControlInteractivity(IControlSettings settings,
                                                Control::IControlAppearance unfocusedAppearance,
-                                               TerminalConnection::ITerminalConnection connection) :
+                                               TerminalConnection::ITerminalConnection connection,
+                                               Windows::System::DispatcherQueue dispatcher) :
         _touchAnchor{ std::nullopt },
         _lastMouseClickTimestamp{},
         _lastMouseClickPos{},
         _selectionNeedsToBeCopied{ false }
     {
-        _core = winrt::make_self<ControlCore>(settings, unfocusedAppearance, connection);
+        _id = _nextId.fetch_add(1, std::memory_order_relaxed);
+
+        _core = winrt::make_self<ControlCore>(settings, unfocusedAppearance, connection, dispatcher);
+
+        // GH#14464: Mark mode and quick-edit (shift+arrow) selections update
+        // the selection through ControlCore, bypassing SetEndSelectionPoint.
+        // Listen for selection changes so _selectionNeedsToBeCopied is set
+        // for ALL selection types, not just mouse drag.
+        _core->UpdateSelectionMarkers([weakThis = get_weak()](auto&&, auto&&) {
+            if (auto self{ weakThis.get() })
+            {
+                if (self->_core->HasSelection())
+                {
+                    self->_selectionNeedsToBeCopied = true;
+                }
+            }
+        });
+
+        _createInteractivityTimers();
+    }
+
+    uint64_t ControlInteractivity::Id()
+    {
+        return _id;
+    }
+
+    void ControlInteractivity::Detach()
+    {
+        if (_uiaEngine)
+        {
+            // There's a potential race here where we've removed the TermControl
+            // from the UI tree, but the UIA engine is in the middle of a paint,
+            // and the UIA engine will try to dispatch to the
+            // TermControlAutomationPeer, which (is now)/(will very soon be) gone.
+            //
+            // To alleviate, make sure to disable the UIA engine and remove it,
+            // and ALSO disable the renderer. Core.Detach will take care of the
+            // TriggerTeardown (which will stop the renderer
+            // after all current engines are done painting).
+            //
+            // Simply disabling the UIA engine is not enough, because it's
+            // possible that it had already started presenting here.
+            LOG_IF_FAILED(_uiaEngine->Disable());
+            _core->DetachUiaEngine(_uiaEngine.get());
+        }
+        _core->Detach();
+    }
+
+    void ControlInteractivity::AttachToNewControl()
+    {
+        _core->AttachToNewControl();
     }
 
     // Method Description:
@@ -69,9 +115,37 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         _multiClickTimer = GetDoubleClickTime() * 1000;
     }
 
-    Control::ControlCore ControlInteractivity::Core()
+    winrt::com_ptr<ControlCore> ControlInteractivity::Core()
     {
-        return *_core;
+        return _core;
+    }
+
+    void ControlInteractivity::Close()
+    {
+        Closed.raise(*this, nullptr);
+        _destroyInteractivityTimers();
+        if (_core)
+        {
+            _core->Close();
+        }
+    }
+
+    void ControlInteractivity::_createInteractivityTimers()
+    {
+        _autoScrollTimer = _core->RegisterRenderTimer("autoscroll", [weak = get_weak()]() {
+            if (auto strong = weak.get())
+            {
+                strong->_updateAutoScroll();
+            }
+        });
+    }
+
+    void ControlInteractivity::_destroyInteractivityTimers()
+    {
+        if (_autoScrollTimer)
+        {
+            _core->StopRenderTimer(_autoScrollTimer);
+        }
     }
 
     // Method Description:
@@ -106,6 +180,8 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
     void ControlInteractivity::GotFocus()
     {
+        _focused = true;
+
         if (_uiaEngine.get())
         {
             THROW_IF_FAILED(_uiaEngine->Enable());
@@ -118,6 +194,8 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
     void ControlInteractivity::LostFocus()
     {
+        _focused = false;
+
         if (_uiaEngine.get())
         {
             THROW_IF_FAILED(_uiaEngine->Disable());
@@ -144,10 +222,12 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     //     Windows Clipboard (CascadiaWin32:main.cpp).
     // Arguments:
     // - singleLine: collapse all of the text to one line
+    // - withControlSequences: if enabled, the copied plain text contains color/style ANSI escape codes from the selection
     // - formats: which formats to copy (defined by action's CopyFormatting arg). nullptr
     //             if we should defer which formats are copied to the global setting
     bool ControlInteractivity::CopySelectionToClipboard(bool singleLine,
-                                                        const Windows::Foundation::IReference<CopyFormat>& formats)
+                                                        bool withControlSequences,
+                                                        const CopyFormat formats)
     {
         if (_core)
         {
@@ -163,7 +243,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             // Mark the current selection as copied
             _selectionNeedsToBeCopied = false;
 
-            return _core->CopySelectionToClipboard(singleLine, formats);
+            return _core->CopySelectionToClipboard(singleLine, withControlSequences, formats);
         }
 
         return false;
@@ -173,40 +253,47 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // - Initiate a paste operation.
     void ControlInteractivity::RequestPasteTextFromClipboard()
     {
-        // attach ControlInteractivity::_sendPastedTextToConnection() as the
-        // clipboardDataHandler. This is called when the clipboard data is
-        // loaded.
-        auto clipboardDataHandler = std::bind(&ControlInteractivity::_sendPastedTextToConnection, this, std::placeholders::_1);
-        auto pasteArgs = winrt::make_self<PasteFromClipboardEventArgs>(clipboardDataHandler, _core->BracketedPasteEnabled());
+        auto args = winrt::make<PasteFromClipboardEventArgs>(
+            [core = _core](const winrt::hstring& wstr) {
+                core->PasteText(wstr);
+            },
+            _core->BracketedPasteEnabled());
 
         // send paste event up to TermApp
-        _PasteFromClipboardHandlers(*this, *pasteArgs);
+        PasteFromClipboard.raise(*this, std::move(args));
     }
 
-    // Method Description:
-    // - Pre-process text pasted (presumably from the clipboard)
-    //   before sending it over the terminal's connection.
-    void ControlInteractivity::_sendPastedTextToConnection(std::wstring_view wstr)
+    std::wstring ControlInteractivity::_getHyperlinkForPointerEvent(
+        const bool isLeftButton,
+        const ::Microsoft::Terminal::Core::ControlKeyStates modifiers,
+        const til::point terminalPosition) const
     {
-        _core->PasteText(winrt::hstring{ wstr });
+        if (isLeftButton && modifiers.IsCtrlPressed())
+        {
+            return _core->GetHyperlink(terminalPosition.to_core_point());
+        }
+        return {};
     }
 
-    void ControlInteractivity::PointerPressed(Control::MouseButtonState buttonState,
+    void ControlInteractivity::PointerPressed(const uint32_t /*pointerId*/,
+                                              Control::MouseButtonState buttonState,
                                               const unsigned int pointerUpdateKind,
                                               const uint64_t timestamp,
                                               const ::Microsoft::Terminal::Core::ControlKeyStates modifiers,
                                               const Core::Point pixelPosition)
     {
-        const auto terminalPosition = _getTerminalPosition(til::point{ pixelPosition });
+        // Un-rounded coordinates; we only round when selecting text
+        const auto terminalPosition = _getTerminalPosition(til::point{ pixelPosition }, false);
 
         const auto altEnabled = modifiers.IsAltPressed();
         const auto shiftEnabled = modifiers.IsShiftPressed();
-        const auto ctrlEnabled = modifiers.IsCtrlPressed();
+
+        // Mark that this pointer event actually started within our bounds.
+        // We'll need this later, for PointerMoved events.
+        _pointerPressedInBounds = true;
 
         // GH#9396: we prioritize hyper-link over VT mouse events
-        auto hyperlink = _core->GetHyperlink(terminalPosition.to_core_point());
-        if (WI_IsFlagSet(buttonState, MouseButtonState::IsLeftButtonDown) &&
-            ctrlEnabled && !hyperlink.empty())
+        if (const auto hyperlink = _getHyperlinkForPointerEvent(WI_IsFlagSet(buttonState, MouseButtonState::IsLeftButtonDown), modifiers, terminalPosition); !hyperlink.empty())
         {
             const auto clickCount = _numberOfClicks(pixelPosition, timestamp);
             // Handle hyper-link only on the first click to prevent multiple activations
@@ -240,7 +327,12 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             }
             const auto isOnOriginalPosition = _lastMouseClickPosNoSelection == pixelPosition;
 
-            _core->LeftClickOnTerminal(terminalPosition,
+            // Rounded coordinates for text selection.
+            // Don't round in VT mouse mode; cell-level precision matters more.
+            // Only round for single-click: for double/triple-click, rounding
+            // can push the position to the next cell, selecting the wrong word.
+            const auto round = multiClickMapper == 1 && !_core->IsVtMouseModeEnabled();
+            _core->LeftClickOnTerminal(_getTerminalPosition(til::point{ pixelPosition }, round),
                                        multiClickMapper,
                                        altEnabled,
                                        shiftEnabled,
@@ -250,20 +342,45 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             if (_core->HasSelection())
             {
                 // GH#9787: if selection is active we don't want to track the touchdown position
-                // so that dragging the mouse will extend the selection rather than starting the new one
-                _singleClickTouchdownPos = std::nullopt;
+                // so that dragging the mouse will extend the selection rather than starting the new one.
+                // In VT mouse mode, keep tracking the touchdown point so that PointerMoved
+                // can re-anchor the selection based on drag direction (the dx < 0 adjustment).
+                // Without this, dragging left wouldn't include the initially clicked cell
+                // because floored coordinates place the anchor on the cell's left edge.
+                if (!_core->IsVtMouseModeEnabled())
+                {
+                    _singleClickTouchdownPos = std::nullopt;
+                }
             }
         }
         else if (WI_IsFlagSet(buttonState, MouseButtonState::IsRightButtonDown))
         {
-            // Try to copy the text and clear the selection
-            const auto successfulCopy = CopySelectionToClipboard(shiftEnabled, nullptr);
-            _core->ClearSelection();
-            if (_core->CopyOnSelect() || !successfulCopy)
+            if (_core->Settings().RightClickContextMenu())
             {
-                // CopyOnSelect: right click always pastes!
-                // Otherwise: no selection --> paste
-                RequestPasteTextFromClipboard();
+                // Let the core know we're about to open a menu here. It has
+                // some separate conditional logic based on _where_ the user
+                // wanted to open the menu.
+                _core->AnchorContextMenu(terminalPosition);
+
+                auto contextArgs = winrt::make<ContextMenuRequestedEventArgs>(til::point{ pixelPosition }.to_winrt_point());
+                ContextMenuRequested.raise(*this, contextArgs);
+            }
+            else
+            {
+                // GH#19942, GH#14464: Don't re-copy a selection that was
+                // already copied via copyOnSelect on mouse-up. But DO copy
+                // if the selection was made via mark mode or modified with
+                // quick-edit keys (shift+arrow), since those paths never
+                // triggered an automatic copy.
+                const auto copied = (_selectionNeedsToBeCopied || !_core->CopyOnSelect()) &&
+                                    CopySelectionToClipboard(shiftEnabled, false, _core->Settings().CopyFormatting());
+                _core->ClearSelection();
+                if (_core->CopyOnSelect() || !copied)
+                {
+                    // CopyOnSelect: right-click always pastes.
+                    // Otherwise: no selection → paste.
+                    RequestPasteTextFromClipboard();
+                }
             }
         }
     }
@@ -273,25 +390,27 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         _touchAnchor = contactPoint;
     }
 
-    void ControlInteractivity::PointerMoved(Control::MouseButtonState buttonState,
+    bool ControlInteractivity::PointerMoved(const uint32_t pointerId,
+                                            Control::MouseButtonState buttonState,
                                             const unsigned int pointerUpdateKind,
                                             const ::Microsoft::Terminal::Core::ControlKeyStates modifiers,
-                                            const bool focused,
-                                            const Core::Point pixelPosition,
-                                            const bool pointerPressedInBounds)
+                                            const Core::Point pixelPosition)
     {
-        const auto terminalPosition = _getTerminalPosition(til::point{ pixelPosition });
+        const auto terminalPosition = _getTerminalPosition(til::point{ pixelPosition }, false);
+        // Returning true from this function indicates that the caller should do no further processing of this movement.
+        bool handledCompletely = false;
 
         // Short-circuit isReadOnly check to avoid warning dialog
-        if (focused && !_core->IsInReadOnlyMode() && _canSendVTMouseInput(modifiers))
+        if (_focused && !_core->IsInReadOnlyMode() && _canSendVTMouseInput(modifiers))
         {
             _sendMouseEventHelper(terminalPosition, pointerUpdateKind, modifiers, 0, buttonState);
+            handledCompletely = true;
         }
         // GH#4603 - don't modify the selection if the pointer press didn't
         // actually start _in_ the control bounds. Case in point - someone drags
         // a file into the bounds of the control. That shouldn't send the
         // selection into space.
-        else if (focused && pointerPressedInBounds && WI_IsFlagSet(buttonState, MouseButtonState::IsLeftButtonDown))
+        else if (_focused && _pointerPressedInBounds && WI_IsFlagSet(buttonState, MouseButtonState::IsLeftButtonDown))
         {
             if (_singleClickTouchdownPos)
             {
@@ -301,7 +420,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                 const auto touchdownPoint = *_singleClickTouchdownPos;
                 const auto dx = pixelPosition.X - touchdownPoint.X;
                 const auto dy = pixelPosition.Y - touchdownPoint.Y;
-                const auto w = fontSizeInDips.width;
+                const auto w = fontSizeInDips.Width;
                 const auto distanceSquared = dx * dx + dy * dy;
                 const auto maxDistanceSquared = w * w / 16; // (w / 4)^2
 
@@ -311,7 +430,19 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                     // _touchdown_ point here. We want to start the selection
                     // from where the user initially clicked, not where they are
                     // now.
-                    _core->SetSelectionAnchor(_getTerminalPosition(til::point{ touchdownPoint }));
+                    auto termPos = _getTerminalPosition(til::point{ touchdownPoint }, false);
+                    if (dx < 0)
+                    {
+                        // _getTerminalPosition(_, false) will floor the x-value,
+                        //   meaning that the selection will start on the left-side
+                        //   of the current cell. This is great if the use is dragging
+                        //   towards the right.
+                        // If the user is dragging towards the left (dx < 0),
+                        //   we want to select the current cell, so place the anchor on the right
+                        //   side of the current cell.
+                        termPos.x++;
+                    }
+                    _core->SetSelectionAnchor(termPos);
 
                     // stop tracking the touchdown point
                     _singleClickTouchdownPos = std::nullopt;
@@ -319,15 +450,46 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             }
 
             SetEndSelectionPoint(pixelPosition);
+
+            // Automatic scrolling; only triggers when the drag originated inside the terminal.
+            {
+                // We want to find the distance relative to the bounds of the
+                // SwapChainPanel, not the entire control. If they drag out of
+                // the bounds of the text, into the padding, we still want that
+                // to auto-scroll
+                const auto height = _core->ViewportSize().Height * _core->FontSize().Height;
+                const auto cursorBelowBottomDist = pixelPosition.Y - height;
+                const auto cursorAboveTopDist = -1 * pixelPosition.Y;
+
+                constexpr auto MinAutoScrollDist = 2.0; // Arbitrary value
+                auto newAutoScrollVelocity = 0.0;
+                if (cursorBelowBottomDist > MinAutoScrollDist)
+                {
+                    newAutoScrollVelocity = _getAutoScrollSpeed(cursorBelowBottomDist);
+                }
+                else if (cursorAboveTopDist > MinAutoScrollDist)
+                {
+                    newAutoScrollVelocity = -1.0 * _getAutoScrollSpeed(cursorAboveTopDist);
+                }
+
+                if (newAutoScrollVelocity != 0)
+                {
+                    _tryStartAutoScroll(pointerId, pixelPosition, newAutoScrollVelocity);
+                }
+                else
+                {
+                    _tryStopAutoScroll(pointerId);
+                }
+            }
         }
 
         _core->SetHoveredCell(terminalPosition.to_core_point());
+        return handledCompletely;
     }
 
-    void ControlInteractivity::TouchMoved(const Core::Point newTouchPoint,
-                                          const bool focused)
+    void ControlInteractivity::TouchMoved(const Core::Point newTouchPoint)
     {
-        if (focused &&
+        if (_focused &&
             _touchAnchor)
         {
             const auto anchor = _touchAnchor.value();
@@ -337,16 +499,16 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             const auto fontSizeInDips{ _core->FontSizeInDips() };
 
             // Get the difference between the point we've dragged to and the start of the touch.
-            const auto dy = static_cast<double>(newTouchPoint.Y - anchor.Y);
+            const auto dy = static_cast<float>(newTouchPoint.Y - anchor.Y);
 
             // Start viewport scroll after we've moved more than a half row of text
-            if (std::abs(dy) > (fontSizeInDips.height / 2.0))
+            if (std::abs(dy) > (fontSizeInDips.Height / 2.0f))
             {
                 // Multiply by -1, because moving the touch point down will
                 // create a positive delta, but we want the viewport to move up,
                 // so we'll need a negative scroll amount (and the inverse for
                 // panning down)
-                const auto numRows = dy / -fontSizeInDips.height;
+                const auto numRows = dy / -fontSizeInDips.Height;
 
                 const auto currentOffset = _core->ScrollOffset();
                 const auto newValue = numRows + currentOffset;
@@ -361,23 +523,34 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         }
     }
 
-    void ControlInteractivity::PointerReleased(Control::MouseButtonState buttonState,
+    void ControlInteractivity::PointerReleased(const uint32_t pointerId,
+                                               Control::MouseButtonState buttonState,
                                                const unsigned int pointerUpdateKind,
                                                const ::Microsoft::Terminal::Core::ControlKeyStates modifiers,
                                                const Core::Point pixelPosition)
     {
-        const auto terminalPosition = _getTerminalPosition(til::point{ pixelPosition });
+        _pointerPressedInBounds = false;
+
+        const auto terminalPosition = _getTerminalPosition(til::point{ pixelPosition }, false);
+        const auto isLeftMouseRelease = pointerUpdateKind == WM_LBUTTONUP;
+
         // Short-circuit isReadOnly check to avoid warning dialog
         if (!_core->IsInReadOnlyMode() && _canSendVTMouseInput(modifiers))
         {
-            _sendMouseEventHelper(terminalPosition, pointerUpdateKind, modifiers, 0, buttonState);
+            if (const auto hyperlink = _getHyperlinkForPointerEvent(isLeftMouseRelease, modifiers, terminalPosition); !hyperlink.empty())
+            {
+                // GH#20630: Avoid emitting hyperlink clicks as VT mouse releases.
+                // We handled the hyperlink click in PointerPressed after all.
+            }
+            else
+            {
+                _sendMouseEventHelper(terminalPosition, pointerUpdateKind, modifiers, 0, buttonState);
+            }
             return;
         }
 
         // Only a left click release when copy on select is active should perform a copy.
         // Right clicks and middle clicks should not need to do anything when released.
-        const auto isLeftMouseRelease = pointerUpdateKind == WM_LBUTTONUP;
-
         if (_core->CopyOnSelect() &&
             isLeftMouseRelease &&
             _selectionNeedsToBeCopied)
@@ -385,10 +558,11 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             // IMPORTANT!
             // DO NOT clear the selection here!
             // Otherwise, the selection will be cleared immediately after you make it.
-            CopySelectionToClipboard(false, nullptr);
+            CopySelectionToClipboard(false, false, _core->Settings().CopyFormatting());
         }
 
         _singleClickTouchdownPos = std::nullopt;
+        _tryStopAutoScroll(pointerId);
     }
 
     void ControlInteractivity::TouchReleased()
@@ -409,12 +583,10 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // - modifiers: The modifiers pressed during this event, in the form of a VirtualKeyModifiers
     // - delta: the mouse wheel delta that triggered this event.
     bool ControlInteractivity::MouseWheel(const ::Microsoft::Terminal::Core::ControlKeyStates modifiers,
-                                          const int32_t delta,
+                                          const Core::Point delta,
                                           const Core::Point pixelPosition,
                                           const Control::MouseButtonState buttonState)
     {
-        const auto terminalPosition = _getTerminalPosition(til::point{ pixelPosition });
-
         // Short-circuit isReadOnly check to avoid warning dialog.
         //
         // GH#3321: Alternate scroll mode is a special type of mouse input mode
@@ -429,27 +601,28 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             // here with a PointerPoint. However, as of #979, we don't have a
             // PointerPoint to work with. So, we're just going to do a
             // mousewheel event manually
+            const auto terminalPosition = _getTerminalPosition(til::point{ pixelPosition }, false);
             return _sendMouseEventHelper(terminalPosition,
-                                         WM_MOUSEWHEEL,
+                                         delta.Y != 0 ? WM_MOUSEWHEEL : WM_MOUSEHWHEEL,
                                          modifiers,
-                                         ::base::saturated_cast<short>(delta),
+                                         ::base::saturated_cast<short>(delta.Y != 0 ? delta.Y : delta.X),
                                          buttonState);
         }
 
         const auto ctrlPressed = modifiers.IsCtrlPressed();
         const auto shiftPressed = modifiers.IsShiftPressed();
 
-        if (ctrlPressed && shiftPressed)
+        if (ctrlPressed && shiftPressed && _core->Settings().ScrollToChangeOpacity())
         {
-            _mouseTransparencyHandler(delta);
+            _mouseTransparencyHandler(delta.Y);
         }
-        else if (ctrlPressed)
+        else if (ctrlPressed && !shiftPressed && _core->Settings().ScrollToZoom())
         {
-            _mouseZoomHandler(delta);
+            _mouseZoomHandler(delta.Y);
         }
         else
         {
-            _mouseScrollHandler(delta, pixelPosition, WI_IsFlagSet(buttonState, MouseButtonState::IsLeftButtonDown));
+            _mouseScrollHandler(delta.Y, pixelPosition, WI_IsFlagSet(buttonState, MouseButtonState::IsLeftButtonDown));
         }
         return false;
     }
@@ -459,10 +632,10 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     //   scrolling event.
     // Arguments:
     // - mouseDelta: the mouse wheel delta that triggered this event.
-    void ControlInteractivity::_mouseTransparencyHandler(const double mouseDelta)
+    void ControlInteractivity::_mouseTransparencyHandler(const int32_t mouseDelta) const
     {
         // Transparency is on a scale of [0.0,1.0], so only increment by .01.
-        const auto effectiveDelta = mouseDelta < 0 ? -.01 : .01;
+        const auto effectiveDelta = mouseDelta < 0 ? -.01f : .01f;
         _core->AdjustOpacity(effectiveDelta);
     }
 
@@ -471,9 +644,9 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     //   event.
     // Arguments:
     // - mouseDelta: the mouse wheel delta that triggered this event.
-    void ControlInteractivity::_mouseZoomHandler(const double mouseDelta)
+    void ControlInteractivity::_mouseZoomHandler(const int32_t mouseDelta) const
     {
-        const auto fontDelta = mouseDelta < 0 ? -1 : 1;
+        const auto fontDelta = mouseDelta < 0 ? -1.0f : 1.0f;
         _core->AdjustFontSize(fontDelta);
     }
 
@@ -483,7 +656,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // - mouseDelta: the mouse wheel delta that triggered this event.
     // - pixelPosition: the location of the mouse during this event
     // - isLeftButtonPressed: true iff the left mouse button was pressed during this event.
-    void ControlInteractivity::_mouseScrollHandler(const double mouseDelta,
+    void ControlInteractivity::_mouseScrollHandler(const int32_t mouseDelta,
                                                    const Core::Point pixelPosition,
                                                    const bool isLeftButtonPressed)
     {
@@ -498,7 +671,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         // underneath us. We wouldn't know - we don't want the overhead of
         // another ScrollPositionChanged handler. If the scrollbar should be
         // somewhere other than where it is currently, then start from that row.
-        const auto currentInternalRow = ::base::saturated_cast<int>(::std::round(_internalScrollbarPosition));
+        const auto currentInternalRow = std::lround(_internalScrollbarPosition);
         const auto currentCoreRow = _core->ScrollOffset();
         const auto currentOffset = currentInternalRow == currentCoreRow ?
                                        _internalScrollbarPosition :
@@ -508,13 +681,13 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         // However, for us, the signs are flipped.
         // With one of the precision mice, one click is always a multiple of 120 (WHEEL_DELTA),
         // but the "smooth scrolling" mode results in non-int values
-        const auto rowDelta = mouseDelta / (-1.0 * WHEEL_DELTA);
+        const auto rowDelta = mouseDelta / (-1.0f * WHEEL_DELTA);
 
         // WHEEL_PAGESCROLL is a Win32 constant that represents the "scroll one page
         // at a time" setting. If we ignore it, we will scroll a truly absurd number
         // of rows.
-        const auto rowsToScroll{ _rowsToScroll == WHEEL_PAGESCROLL ? ::base::saturated_cast<double>(_core->ViewHeight()) : _rowsToScroll };
-        auto newValue = (rowsToScroll * rowDelta) + (currentOffset);
+        const auto rowsToScroll{ _rowsToScroll == WHEEL_PAGESCROLL ? _core->ViewportSize().Height : _rowsToScroll };
+        const auto newValue = rowsToScroll * rowDelta + currentOffset;
 
         // Update the Core's viewport position, and raise a
         // ScrollPositionChanged event to update the scrollbar
@@ -544,32 +717,32 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // - newValue: The new top of the viewport
     // Return Value:
     // - <none>
-    void ControlInteractivity::UpdateScrollbar(const double newValue)
+    void ControlInteractivity::UpdateScrollbar(const float newValue)
     {
         // Set this as the new value of our internal scrollbar representation.
         // We're doing this so we can accumulate fractional amounts of a row to
         // scroll each time the mouse scrolls.
-        _internalScrollbarPosition = std::clamp<double>(newValue, 0.0, _core->BufferHeight());
+        _internalScrollbarPosition = std::clamp(newValue, 0.0f, static_cast<float>(_core->BufferHeight()));
 
         // If the new scrollbar position, rounded to an int, is at a different
         // row, then actually update the scroll position in the core, and raise
         // a ScrollPositionChanged to inform the control.
-        auto viewTop = ::base::saturated_cast<int>(::std::round(_internalScrollbarPosition));
+        const auto viewTop = std::lround(_internalScrollbarPosition);
         if (viewTop != _core->ScrollOffset())
         {
             _core->UserScrollViewport(viewTop);
 
             // _core->ScrollOffset() is now set to newValue
-            _ScrollPositionChangedHandlers(*this,
-                                           winrt::make<ScrollPositionChangedArgs>(_core->ScrollOffset(),
-                                                                                  _core->ViewHeight(),
-                                                                                  _core->BufferHeight()));
+            ScrollPositionChanged.raise(*this,
+                                        winrt::make<ScrollPositionChangedArgs>(_core->ScrollOffset(),
+                                                                               _core->ViewportSize().Height,
+                                                                               _core->BufferHeight()));
         }
     }
 
     void ControlInteractivity::_hyperlinkHandler(const std::wstring_view uri)
     {
-        _OpenHyperlinkHandlers(*this, winrt::make<OpenHyperlinkEventArgs>(winrt::hstring{ uri }));
+        OpenHyperlink.raise(*this, winrt::make<OpenHyperlinkEventArgs>(winrt::hstring{ uri }));
     }
 
     bool ControlInteractivity::_canSendVTMouseInput(const ::Microsoft::Terminal::Core::ControlKeyStates modifiers)
@@ -583,7 +756,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         return _core->IsVtMouseModeEnabled();
     }
 
-    bool ControlInteractivity::_shouldSendAlternateScroll(const ::Microsoft::Terminal::Core::ControlKeyStates modifiers, const int32_t delta)
+    bool ControlInteractivity::_shouldSendAlternateScroll(const ::Microsoft::Terminal::Core::ControlKeyStates modifiers, const Core::Point delta)
     {
         // If the user is holding down Shift, suppress mouse events
         // TODO GH#4875: disable/customize this functionality
@@ -591,7 +764,14 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         {
             return false;
         }
-        return _core->ShouldSendAlternateScroll(WM_MOUSEWHEEL, delta);
+        if (delta.Y != 0)
+        {
+            return _core->ShouldSendAlternateScroll(WM_MOUSEWHEEL, delta.Y);
+        }
+        else
+        {
+            return _core->ShouldSendAlternateScroll(WM_MOUSEHWHEEL, delta.X);
+        }
     }
 
     // Method Description:
@@ -600,7 +780,9 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // - cursorPosition: in pixels, relative to the origin of the control
     void ControlInteractivity::SetEndSelectionPoint(const Core::Point pixelPosition)
     {
-        _core->SetEndSelectionPoint(_getTerminalPosition(til::point{ pixelPosition }));
+        // Don't round in VT mouse mode; cell-level precision matters more
+        const auto round = !_core->IsVtMouseModeEnabled();
+        _core->SetEndSelectionPoint(_getTerminalPosition(til::point{ pixelPosition }, round));
         _selectionNeedsToBeCopied = true;
     }
 
@@ -610,12 +792,22 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // Arguments:
     // - pixelPosition: the (x,y) position of a given point (i.e.: mouse cursor).
     //    NOTE: origin (0,0) is top-left.
+    // - roundToNearestCell: if true, round the x-value. Otherwise, floor it (standard int division)
     // Return Value:
     // - the corresponding viewport terminal position for the given Point parameter
-    til::point ControlInteractivity::_getTerminalPosition(const til::point pixelPosition)
+    til::point ControlInteractivity::_getTerminalPosition(const til::point pixelPosition, bool roundToNearestCell)
     {
         // Get the size of the font, which is in pixels
-        const til::size fontSize{ _core->GetFont().GetSize() };
+        const auto fontSize{ _core->GetFont().GetCellSizeInPhysicalPx() };
+
+        if (roundToNearestCell)
+        {
+            // GH#5099: round the x-value to the nearest cell
+            til::point result;
+            result.x = gsl::narrow_cast<til::CoordType>(std::round(gsl::narrow_cast<double>(pixelPosition.x) / fontSize.width));
+            result.y = pixelPosition.y / fontSize.height;
+            return result;
+        }
         // Convert the location in pixels to characters within the current viewport.
         return pixelPosition / fontSize;
     }
@@ -626,13 +818,10 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                                                      const SHORT wheelDelta,
                                                      Control::MouseButtonState buttonState)
     {
-        const auto adjustment = _core->ScrollOffset() > 0 ? _core->BufferHeight() - _core->ScrollOffset() - _core->ViewHeight() : 0;
-        // If the click happened outside the active region, just don't send any mouse event
-        if (const auto adjustedY = terminalPosition.y - adjustment; adjustedY >= 0)
-        {
-            return _core->SendMouseEvent({ terminalPosition.x, adjustedY }, pointerUpdateKind, modifiers, wheelDelta, toInternalMouseState(buttonState));
-        }
-        return false;
+        const auto adjustment = _core->BufferHeight() - _core->ScrollOffset() - _core->ViewportSize().Height;
+        // If the click happened outside the active region, core should get a chance to filter it out or clamp it.
+        const auto adjustedY = terminalPosition.y - adjustment;
+        return _core->SendMouseEvent({ terminalPosition.x, adjustedY }, pointerUpdateKind, modifiers, wheelDelta, toInternalMouseState(buttonState));
     }
 
     // Method Description:
@@ -646,35 +835,113 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // - None
     // Return Value:
     // - The automation peer for our control
-    Control::InteractivityAutomationPeer ControlInteractivity::OnCreateAutomationPeer()
+    void ControlInteractivity::SetUiaEventDispatcher(IUiaEventDispatcher* uiaEventDispatcher)
     try
     {
-        const auto autoPeer = winrt::make_self<implementation::InteractivityAutomationPeer>(this);
-
-        _uiaEngine = std::make_unique<::Microsoft::Console::Render::UiaEngine>(autoPeer.get());
+        if (_uiaEngine)
+        {
+            _core->DetachUiaEngine(_uiaEngine.get());
+        }
+        _uiaEngine = std::make_unique<::Microsoft::Console::Render::UiaEngine>(uiaEventDispatcher);
         _core->AttachUiaEngine(_uiaEngine.get());
-        return *autoPeer;
     }
-    catch (...)
-    {
-        LOG_CAUGHT_EXCEPTION();
-        return nullptr;
-    }
+    CATCH_LOG()
 
-    ::Microsoft::Console::Types::IUiaData* ControlInteractivity::GetUiaData() const
+    ::Microsoft::Console::Render::IRenderData* ControlInteractivity::GetRenderData() const
     {
-        return _core->GetUiaData();
+        return _core->GetRenderData();
     }
 
     // Method Description:
-    // - Used by the TermControl to know if it should translate drag-dropped
-    //   paths into WSL-friendly paths.
+    // - Calculates speed of single axis of auto scrolling. It has to allow for both
+    //      fast and precise selection.
     // Arguments:
-    // - <none>
+    // - cursorDistanceFromBorder: distance from viewport border to cursor, in pixels. Must be non-negative.
     // Return Value:
-    // - true if the connection we were created with was a WSL profile.
-    bool ControlInteractivity::ManglePathsForWsl()
+    // - positive speed in characters / sec
+    double ControlInteractivity::_getAutoScrollSpeed(double cursorDistanceFromBorder) const
     {
-        return _core->Settings().ProfileSource() == L"Windows.Terminal.Wsl";
+        // The numbers below just feel well, feel free to change.
+        // TODO: Maybe account for space beyond border that user has available
+        return std::pow(cursorDistanceFromBorder, 2.0) / 25.0 + 2.0;
+    }
+
+    // Method Description:
+    // - Starts new pointer related auto scroll behavior, or continues existing one.
+    //      Does nothing when there is already auto scroll associated with another pointer.
+    // Arguments:
+    // - pointerId, point: info about pointer that causes auto scroll. Pointer's position
+    //      is later used to update selection.
+    // - scrollVelocity: target velocity of scrolling in characters / sec
+    void ControlInteractivity::_tryStartAutoScroll(const uint32_t pointerId, const Core::Point& point, const double scrollVelocity)
+    {
+        // Allow only one pointer at the time
+        if (!_autoScrollingPointerId ||
+            _autoScrollingPointerId == pointerId)
+        {
+            _autoScrollingPointerId = pointerId;
+            _autoScrollingPointerPoint = point;
+            _autoScrollVelocity = scrollVelocity;
+
+            // If this is first time the auto scroll update is about to be called,
+            //      kick-start it by initializing its time delta as if it started now
+            if (!_lastAutoScrollUpdateTime)
+            {
+                _lastAutoScrollUpdateTime = std::chrono::high_resolution_clock::now();
+            }
+
+            // Apparently this check is not necessary but greatly improves performance
+            if (!_core->IsRenderTimerRunning(_autoScrollTimer))
+            {
+                static constexpr auto AutoScrollUpdateInterval = std::chrono::microseconds(static_cast<int>(1.0 / 30.0 * 1000000));
+                _core->StartRepeatingRenderTimer(_autoScrollTimer, AutoScrollUpdateInterval.count());
+            }
+        }
+    }
+
+    // Method Description:
+    // - Stops auto scroll if it's active and is associated with supplied pointer id.
+    // Arguments:
+    // - pointerId: id of pointer for which to stop auto scroll
+    void ControlInteractivity::_tryStopAutoScroll(const uint32_t pointerId)
+    {
+        if (_autoScrollingPointerId &&
+            pointerId == _autoScrollingPointerId)
+        {
+            _autoScrollingPointerId = std::nullopt;
+            _autoScrollingPointerPoint = std::nullopt;
+            _autoScrollVelocity = 0;
+            _lastAutoScrollUpdateTime = std::nullopt;
+
+            // Apparently this check is not necessary but greatly improves performance
+            _core->StopRenderTimer(_autoScrollTimer);
+        }
+    }
+
+    // Method Description:
+    // - Called continuously to gradually scroll viewport when user is mouse
+    //   selecting outside it (to 'follow' the cursor).
+    // Arguments:
+    // - none
+    void ControlInteractivity::_updateAutoScroll()
+    {
+        if (_autoScrollVelocity != 0)
+        {
+            const auto timeNow = std::chrono::high_resolution_clock::now();
+
+            if (_lastAutoScrollUpdateTime)
+            {
+                static constexpr auto microSecPerSec = 1000000.0;
+                const auto deltaTime = std::chrono::duration_cast<std::chrono::microseconds>(timeNow - *_lastAutoScrollUpdateTime).count() / microSecPerSec;
+                UpdateScrollbar(static_cast<float>(_core->ScrollOffset()) + static_cast<float>(_autoScrollVelocity * deltaTime));
+
+                if (_autoScrollingPointerPoint)
+                {
+                    SetEndSelectionPoint(*_autoScrollingPointerPoint);
+                }
+            }
+
+            _lastAutoScrollUpdateTime = timeNow;
+        }
     }
 }

@@ -35,6 +35,7 @@ class TerminalCoreUnitTests::TerminalBufferTests final
     TEST_CLASS(TerminalBufferTests);
 
     TEST_METHOD(TestSimpleBufferWriting);
+    TEST_METHOD(TestClearScreenAndScrollback);
 
     TEST_METHOD(TestWrappingCharByChar);
     TEST_METHOD(TestWrappingALongString);
@@ -51,12 +52,12 @@ class TerminalCoreUnitTests::TerminalBufferTests final
 
     TEST_METHOD(TestGetReverseTab);
 
-    TEST_METHOD(TestCursorNotifications);
+    TEST_METHOD(TestURLPatternDetection);
 
     TEST_METHOD_SETUP(MethodSetup)
     {
         // STEP 1: Set up the Terminal
-        term = std::make_unique<Terminal>();
+        term = std::make_unique<Terminal>(Terminal::TestDummyMarker{});
         emptyRenderer = std::make_unique<DummyRenderer>(term.get());
         term->Create({ TerminalViewWidth, TerminalViewHeight }, TerminalHistoryLength, *emptyRenderer);
         return true;
@@ -96,6 +97,71 @@ void TerminalBufferTests::TestSimpleBufferWriting()
     TestUtils::VerifyExpectedString(termTb, L"Hello World", { 0, 0 });
 }
 
+void TerminalBufferTests::TestClearScreenAndScrollback()
+{
+    static constexpr auto virtualSize = [](const void* address) -> int {
+        MEMORY_BASIC_INFORMATION info;
+        const auto r = VirtualQuery(address, &info, sizeof(info));
+        return r ? gsl::narrow_cast<int>(info.RegionSize) : 0;
+    };
+    static constexpr auto virtualState = [](const void* address) -> int {
+        MEMORY_BASIC_INFORMATION info;
+        const auto r = VirtualQuery(address, &info, sizeof(info));
+        return r ? gsl::narrow_cast<int>(info.State) : 0;
+    };
+
+    term->Create({ TerminalViewWidth, TerminalViewHeight }, 4096, *emptyRenderer);
+    auto& buffer = *term->_mainBuffer;
+    auto& stateMachine = *term->_stateMachine;
+
+    // Rotate by 17 so the retained viewport wraps around
+    // the allocation and overlaps its destination.
+    stateMachine.ProcessString(std::wstring(17, L'\n'));
+    stateMachine.ProcessString(L"\x1b]133;A\aold\x1b]133;D;1\a");
+    stateMachine.ProcessString(std::wstring(buffer.TotalRowCount() - 1, L'\n'));
+    stateMachine.ProcessString(L"\x1b[H\x1b]133;A\aa\x1b]133;D;0\a\x1b[6;1H\x1b]133;A\ab");
+
+    VERIFY_ARE_EQUAL(17, buffer.GetFirstRowIndex());
+    // These offsets map to the first and last physical rows after the rotation.
+    const auto firstRow = &buffer.GetRowByOffset(-17);
+    const auto lastRow = &buffer.GetRowByOffset(-18);
+    VERIFY_ARE_EQUAL(MEM_COMMIT, virtualState(lastRow));
+
+    // Erasing the scrollback should rotate the buffer
+    // and decommit the now unused memory.
+    stateMachine.ProcessString(L"\x1b[3J");
+
+    VERIFY_ARE_EQUAL(0, term->GetViewport().Top());
+    VERIFY_ARE_EQUAL(0, buffer.GetFirstRowIndex());
+    TestUtils::VerifyExpectedString(buffer, L"a", { 0, 0 });
+    TestUtils::VerifyExpectedString(buffer, L"b", { 0, 5 });
+    const auto marks = buffer.GetMarkRows();
+    VERIFY_ARE_EQUAL(size_t{ 2 }, marks.size());
+    VERIFY_ARE_EQUAL(0, marks[0].row);
+    VERIFY_ARE_EQUAL(MarkCategory::Success, marks[0].data.category);
+    VERIFY_IS_TRUE(marks[0].data.exitCode.has_value());
+    VERIFY_ARE_EQUAL(0u, *marks[0].data.exitCode);
+    VERIFY_ARE_EQUAL(5, marks[1].row);
+    VERIFY_ARE_EQUAL(MarkCategory::Prompt, marks[1].data.category);
+    VERIFY_IS_FALSE(marks[1].data.exitCode.has_value());
+
+    VERIFY_ARE_EQUAL(MEM_RESERVE, virtualState(lastRow));
+    VERIFY_ARE_EQUAL(MEM_COMMIT, virtualState(firstRow));
+    VERIFY_IS_LESS_THAN(virtualSize(firstRow), 1024 * 1024);
+
+    stateMachine.ProcessString(L"\x1b[H\x1b[2J\x1b[3J");
+
+    VERIFY_ARE_EQUAL(0, term->GetViewport().Top());
+    VERIFY_IS_TRUE(buffer.GetMarkRows().empty());
+    for (auto y = 0; y < TerminalViewHeight; ++y)
+    {
+        VERIFY_ARE_EQUAL(0, buffer.GetRowByOffset(y).MeasureRight());
+    }
+
+    stateMachine.ProcessString(L"new text");
+    TestUtils::VerifyExpectedString(buffer, L"new text", { 0, 0 });
+}
+
 void TerminalBufferTests::TestWrappingCharByChar()
 {
     auto& termTb = *term->_mainBuffer;
@@ -122,8 +188,8 @@ void TerminalBufferTests::TestWrappingCharByChar()
     VERIFY_ARE_EQUAL(32, secondView.BottomExclusive());
 
     // Verify the cursor wrapped to the second line
-    VERIFY_ARE_EQUAL(charsToWrite % initialView.Width(), cursor.GetPosition().X);
-    VERIFY_ARE_EQUAL(1, cursor.GetPosition().Y);
+    VERIFY_ARE_EQUAL(charsToWrite % initialView.Width(), cursor.GetPosition().x);
+    VERIFY_ARE_EQUAL(1, cursor.GetPosition().y);
 
     // Verify that we marked the 0th row as _wrapped_
     const auto& row0 = termTb.GetRowByOffset(0);
@@ -156,8 +222,8 @@ void TerminalBufferTests::TestWrappingALongString()
     VERIFY_ARE_EQUAL(32, secondView.BottomExclusive());
 
     // Verify the cursor wrapped to the second line
-    VERIFY_ARE_EQUAL(charsToWrite % initialView.Width(), cursor.GetPosition().X);
-    VERIFY_ARE_EQUAL(1, cursor.GetPosition().Y);
+    VERIFY_ARE_EQUAL(charsToWrite % initialView.Width(), cursor.GetPosition().x);
+    VERIFY_ARE_EQUAL(1, cursor.GetPosition().y);
 
     // Verify that we marked the 0th row as _wrapped_
     const auto& row0 = termTb.GetRowByOffset(0);
@@ -285,7 +351,7 @@ std::list<til::CoordType> TerminalBufferTests::_GetTabStops()
     for (;;)
     {
         termSm.ProcessCharacter(L'\t');
-        auto column = cursor.GetPosition().X;
+        auto column = cursor.GetPosition().x;
         if (column >= lastColumn)
         {
             break;
@@ -492,7 +558,7 @@ void TerminalBufferTests::TestGetForwardTab()
         cursor.SetXPosition(0);
 
         auto coordCursorExpected = cursor.GetPosition();
-        coordCursorExpected.X = inputData.front();
+        coordCursorExpected.x = inputData.front();
 
         termSm.ProcessString(nextForwardTab);
         const auto coordCursorResult = cursor.GetPosition();
@@ -506,7 +572,7 @@ void TerminalBufferTests::TestGetForwardTab()
         cursor.SetXPosition(6);
 
         auto coordCursorExpected = cursor.GetPosition();
-        coordCursorExpected.X = *std::next(inputData.begin(), 3);
+        coordCursorExpected.x = *std::next(inputData.begin(), 3);
 
         termSm.ProcessString(nextForwardTab);
         const auto coordCursorResult = cursor.GetPosition();
@@ -520,7 +586,7 @@ void TerminalBufferTests::TestGetForwardTab()
         cursor.SetXPosition(30);
 
         auto coordCursorExpected = cursor.GetPosition();
-        coordCursorExpected.X = coordScreenBufferSize.X - 1;
+        coordCursorExpected.x = coordScreenBufferSize.width - 1;
 
         termSm.ProcessString(nextForwardTab);
         const auto coordCursorResult = cursor.GetPosition();
@@ -531,7 +597,7 @@ void TerminalBufferTests::TestGetForwardTab()
 
     Log::Comment(L"Find next tab from rightmost column.");
     {
-        cursor.SetXPosition(coordScreenBufferSize.X - 1);
+        cursor.SetXPosition(coordScreenBufferSize.width - 1);
 
         auto coordCursorExpected = cursor.GetPosition();
 
@@ -559,7 +625,7 @@ void TerminalBufferTests::TestGetReverseTab()
         cursor.SetXPosition(1);
 
         auto coordCursorExpected = cursor.GetPosition();
-        coordCursorExpected.X = 0;
+        coordCursorExpected.x = 0;
 
         termSm.ProcessString(nextReverseTab);
         const auto coordCursorResult = cursor.GetPosition();
@@ -573,7 +639,7 @@ void TerminalBufferTests::TestGetReverseTab()
         cursor.SetXPosition(6);
 
         auto coordCursorExpected = cursor.GetPosition();
-        coordCursorExpected.X = *std::next(inputData.begin());
+        coordCursorExpected.x = *std::next(inputData.begin());
 
         termSm.ProcessString(nextReverseTab);
         const auto coordCursorResult = cursor.GetPosition();
@@ -587,7 +653,7 @@ void TerminalBufferTests::TestGetReverseTab()
         cursor.SetXPosition(30);
 
         auto coordCursorExpected = cursor.GetPosition();
-        coordCursorExpected.X = inputData.back();
+        coordCursorExpected.x = inputData.back();
 
         termSm.ProcessString(nextReverseTab);
         const auto coordCursorResult = cursor.GetPosition();
@@ -597,42 +663,111 @@ void TerminalBufferTests::TestGetReverseTab()
     }
 }
 
-void TerminalBufferTests::TestCursorNotifications()
+void TerminalBufferTests::TestURLPatternDetection()
 {
-    // Test for GH#11170
+    using namespace std::string_view_literals;
 
-    // Suppress test exceptions. If they occur in the lambda, they'll just crash
-    // TAEF, which is annoying.
-    const WEX::TestExecution::DisableVerifyExceptions disableExceptionsScope;
+    constexpr auto BeforeStr = L"<Before>"sv;
+    constexpr auto UrlStr = L"https://www.contoso.com"sv;
+    constexpr auto AfterStr = L"<After>"sv;
+    constexpr auto urlStartX = BeforeStr.size();
+    constexpr auto urlEndX = BeforeStr.size() + UrlStr.size() - 1;
 
-    auto callbackWasCalled = false;
-    auto expectedCallbacks = 0;
-    auto cb = [&expectedCallbacks, &callbackWasCalled]() mutable {
-        Log::Comment(L"Callback triggered");
-        callbackWasCalled = true;
-        expectedCallbacks--;
-        VERIFY_IS_GREATER_THAN_OR_EQUAL(expectedCallbacks, 0);
-    };
-    term->_pfnCursorPositionChanged = cb;
+    // This is off by default; turn it on for the test.
+    auto originalDetectURLs = term->_detectURLs;
+    auto restoreDetectUrls = wil::scope_exit([&]() {
+        term->_detectURLs = originalDetectURLs;
+    });
+    term->_detectURLs = true;
 
-    // The exact number of callbacks here is fungible, if need be.
+    auto& termSm = *term->_stateMachine;
+    termSm.ProcessString(fmt::format(FMT_COMPILE(L"{}{}{}"), BeforeStr, UrlStr, AfterStr));
+    term->UpdatePatternsUnderLock();
 
-    expectedCallbacks = 1;
-    callbackWasCalled = false;
-    term->Write(L"Foo");
-    VERIFY_ARE_EQUAL(0, expectedCallbacks);
-    VERIFY_IS_TRUE(callbackWasCalled);
+    std::wstring result;
 
-    expectedCallbacks = 1;
-    callbackWasCalled = false;
-    term->Write(L"Foo\r\nBar");
-    VERIFY_ARE_EQUAL(0, expectedCallbacks);
-    VERIFY_IS_TRUE(callbackWasCalled);
+    result = term->GetHyperlinkAtBufferPosition(til::point{ urlStartX - 1, 0 });
+    VERIFY_IS_TRUE(result.empty(), L"URL is not detected before the actual URL.");
 
-    expectedCallbacks = 2; // One for each Write
-    callbackWasCalled = false;
-    term->Write(L"Foo\r\nBar");
-    term->Write(L"Foo\r\nBar");
-    VERIFY_ARE_EQUAL(0, expectedCallbacks);
-    VERIFY_IS_TRUE(callbackWasCalled);
+    result = term->GetHyperlinkAtBufferPosition(til::point{ urlStartX, 0 });
+    VERIFY_IS_TRUE(!result.empty(), L"A URL is detected at the start position.");
+    VERIFY_ARE_EQUAL(result, UrlStr, L"Detected URL matches the given URL.");
+
+    result = term->GetHyperlinkAtBufferPosition(til::point{ urlEndX, 0 });
+    VERIFY_IS_TRUE(!result.empty(), L"A URL is detected at the end position.");
+    VERIFY_ARE_EQUAL(result, UrlStr, L"Detected URL matches the given URL.");
+
+    result = term->GetHyperlinkAtBufferPosition(til::point{ urlEndX + 1, 0 });
+    VERIFY_IS_TRUE(result.empty(), L"URL is not detected after the actual URL.");
+
+    Log::Comment(L"Test wrapped URL detection");
+    {
+        // Build a URL longer than the terminal width so it wraps
+        // Terminal is 80 cols wide; pad before + URL must exceed 80
+        constexpr auto WrapBefore = L"WRAP>"sv;
+        const std::wstring longUrl = L"https://www.contoso.com/this-is-a-very-long-path/that-will-wrap-across-multiple-rows-in-the-terminal-buffer";
+        const auto wrapUrlStartX = static_cast<til::CoordType>(WrapBefore.size());
+        const auto totalLen = WrapBefore.size() + longUrl.size();
+        // The URL should wrap to row 1
+        VERIFY_IS_TRUE(totalLen > static_cast<size_t>(TerminalViewWidth), L"URL must exceed terminal width to wrap");
+
+        // Move cursor to row 2 and write the wrapped URL
+        termSm.ProcessString(L"\r\n\r\n");
+        termSm.ProcessString(fmt::format(FMT_COMPILE(L"{}{}"), WrapBefore, longUrl));
+        term->UpdatePatternsUnderLock();
+
+        const auto cursorRow = term->_mainBuffer->GetCursor().GetPosition().y;
+        const auto wrapRow0 = cursorRow - 1; // first row of wrapped text
+        const auto wrapRow1 = cursorRow; // second row
+
+        // Detect from start of URL (first row)
+        result = term->GetHyperlinkAtBufferPosition(til::point{ wrapUrlStartX, wrapRow0 });
+        VERIFY_IS_TRUE(!result.empty(), L"Wrapped URL is detected on the first row.");
+        VERIFY_ARE_EQUAL(result, longUrl, L"Full wrapped URL is returned from first row.");
+
+        // Detect from second row of URL
+        result = term->GetHyperlinkAtBufferPosition(til::point{ 0, wrapRow1 });
+        VERIFY_IS_TRUE(!result.empty(), L"Wrapped URL is detected on the second row.");
+        VERIFY_ARE_EQUAL(result, longUrl, L"Full wrapped URL is returned from second row.");
+
+        // Before the URL on the first row
+        result = term->GetHyperlinkAtBufferPosition(til::point{ wrapUrlStartX - 1, wrapRow0 });
+        VERIFY_IS_TRUE(result.empty(), L"URL is not detected before the wrapped URL.");
+    }
+
+    Log::Comment(L"Test URL detection after scrolling into history");
+    {
+        // Generate enough output to push the URLs into scrollback
+        for (auto i = 0; i < TerminalViewHeight + 8; i++)
+        {
+            termSm.ProcessString(L"filler\r\n");
+        }
+
+        // Write a new URL at the current cursor position
+        constexpr auto ScrollUrl = L"https://www.example.com/scrolled"sv;
+        termSm.ProcessString(ScrollUrl);
+        term->UpdatePatternsUnderLock();
+
+        const auto scrollUrlRow = term->_mainBuffer->GetCursor().GetPosition().y;
+        result = term->GetHyperlinkAtBufferPosition(til::point{ 0, scrollUrlRow });
+        VERIFY_IS_TRUE(!result.empty(), L"URL is detected after scrolling.");
+        VERIFY_ARE_EQUAL(result, ScrollUrl, L"Correct URL is returned after scrolling.");
+    }
+
+    Log::Comment(L"Test viewport-relative interval coordinates");
+    {
+        constexpr auto VpUrl = L"https://www.example.com/viewport"sv;
+        termSm.ProcessString(L"\r\n");
+        termSm.ProcessString(VpUrl);
+        term->UpdatePatternsUnderLock();
+
+        const auto vpUrlRow = term->_mainBuffer->GetCursor().GetPosition().y;
+        const auto visStart = term->_VisibleStartIndex();
+        const auto viewportRow = vpUrlRow - visStart;
+
+        auto interval = term->GetHyperlinkIntervalFromViewportPosition(til::point{ 0, viewportRow });
+        VERIFY_IS_TRUE(interval.has_value(), L"Interval is found via viewport position.");
+        VERIFY_ARE_EQUAL(interval->start.y, viewportRow, L"Interval start row is viewport-relative.");
+        VERIFY_ARE_EQUAL(interval->start.x, 0, L"Interval starts at column 0.");
+    }
 }

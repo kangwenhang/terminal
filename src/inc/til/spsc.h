@@ -24,9 +24,9 @@ namespace til::spsc
 
     namespace details
     {
-        static constexpr size_type position_mask = std::numeric_limits<size_type>::max() >> 2u; // 0b00111....
-        static constexpr size_type revolution_flag = 1u << (std::numeric_limits<size_type>::digits - 2u); // 0b01000....
-        static constexpr size_type drop_flag = 1u << (std::numeric_limits<size_type>::digits - 1u); // 0b10000....
+        inline constexpr size_type position_mask = std::numeric_limits<size_type>::max() >> 2u; // 0b00111....
+        inline constexpr size_type revolution_flag = 1u << (std::numeric_limits<size_type>::digits - 2u); // 0b01000....
+        inline constexpr size_type drop_flag = 1u << (std::numeric_limits<size_type>::digits - 1u); // 0b10000....
 
         struct block_initially_policy
         {
@@ -119,7 +119,7 @@ namespace til::spsc
             }
             else
             {
-                return static_cast<T*>(::operator new(size, std::align_val_t(alignment)));
+                return static_cast<T*>(::operator new(size, static_cast<std::align_val_t>(alignment)));
             }
         }
 
@@ -133,7 +133,7 @@ namespace til::spsc
             }
             else
             {
-                ::operator delete(ptr, std::align_val_t(alignment));
+                ::operator delete(ptr, static_cast<std::align_val_t>(alignment));
             }
         }
 
@@ -169,7 +169,7 @@ namespace til::spsc
         //   https://en.wikipedia.org/wiki/Producer%E2%80%93consumer_problem
         //
         // arc follows the classic spsc design and manages a ring buffer with two positions: _producer and _consumer.
-        // They contain the position the producer / consumer will next write to / read from respectively.
+        // They contain the position that the producer / consumer will next write to / read from respectively.
         // As usual with ring buffers, these positions are modulo to the _capacity of the underlying buffer.
         // The producer's writable range is [_producer, _consumer) and the consumer's readable is [_consumer, _producer).
         //
@@ -183,7 +183,7 @@ namespace til::spsc
         // Wait, what? [7, 0)? How does that work? As all positions are modulo _capacity, 0 mod 10 is the same as 10 mod 10.
         // If we only want to read forward in the buffer [7, 0) is thus the same as [7, 10).
         //
-        // If we read 3 items from the queue the contents will be:
+        // If we read 3 items from the queue, the contents will be:
         //   [ _ | _ | _ | 3 | 4 | 5 | 6 | _ | _ | _ | _ ]
         //                 ^               ^
         //          _consumer = 3      _producer = 7
@@ -211,7 +211,7 @@ namespace til::spsc
         struct arc
         {
             explicit arc(size_type capacity) noexcept :
-                _data(alloc_raw_memory<T>(size_t(capacity) * sizeof(T))),
+                _data(alloc_raw_memory<T>(static_cast<size_t>(capacity) * sizeof(T))),
                 _capacity(capacity)
             {
             }
@@ -305,7 +305,7 @@ namespace til::spsc
             }
 
             // NOTE: waitMask MUST be either 0 (consumer) or revolution_flag (producer).
-            acquisition acquire(atomic_size_type& mine, atomic_size_type& theirs, size_type waitMask, size_type slots, bool blocking) noexcept
+            acquisition acquire(const atomic_size_type& mine, const atomic_size_type& theirs, size_type waitMask, size_type slots, bool blocking) const noexcept
             {
                 size_type myPos = mine.load(std::memory_order_relaxed);
                 size_type theirPos;

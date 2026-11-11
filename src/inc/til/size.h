@@ -9,22 +9,6 @@ namespace til // Terminal Implementation Library. Also: "Today I Learned"
 {
     struct size
     {
-        // **** TRANSITIONAL ****
-        // The old COORD type uses uppercase X/Y member names.
-        // We'll migrate to lowercase width/height in the future.
-        union
-        {
-            CoordType width = 0;
-            CoordType X;
-            CoordType cx;
-        };
-        union
-        {
-            CoordType height = 0;
-            CoordType Y;
-            CoordType cy;
-        };
-
         constexpr size() noexcept = default;
 
         constexpr size(CoordType width, CoordType height) noexcept :
@@ -55,7 +39,7 @@ namespace til // Terminal Implementation Library. Also: "Today I Learned"
 
         constexpr explicit operator bool() const noexcept
         {
-            return (width > 0) & (height > 0);
+            return width > 0 && height > 0;
         }
 
         constexpr size operator+(const size other) const
@@ -91,7 +75,7 @@ namespace til // Terminal Implementation Library. Also: "Today I Learned"
         }
 
         template<typename TilMath, typename T, typename = std::enable_if_t<std::is_floating_point_v<T>>>
-        constexpr size scale(TilMath math, const T scale) const
+        [[nodiscard]] constexpr size scale(TilMath math, const T scale) const
         {
             return {
                 math,
@@ -100,7 +84,7 @@ namespace til // Terminal Implementation Library. Also: "Today I Learned"
             };
         }
 
-        constexpr size divide_ceil(const size other) const
+        [[nodiscard]] constexpr size divide_ceil(const size other) const
         {
             // The integer ceil division `((a - 1) / b) + 1` only works for numbers >0.
             // Support for negative numbers wasn't deemed useful at this point.
@@ -186,10 +170,25 @@ namespace til // Terminal Implementation Library. Also: "Today I Learned"
         }
 #endif
 
+#ifdef WINRT_Microsoft_Terminal_Core_H
+        explicit constexpr size(const winrt::Microsoft::Terminal::Core::Size other) :
+            width{ other.Width }, height{ other.Height }
+        {
+        }
+
+        winrt::Microsoft::Terminal::Core::Size to_core_size() const noexcept
+        {
+            return { width, height };
+        }
+#endif
+
         std::wstring to_string() const
         {
             return wil::str_printf<std::wstring>(L"[W:%d, H:%d]", width, height);
         }
+
+        CoordType width = 0;
+        CoordType height = 0;
     };
 
     constexpr size wrap_coord_size(const COORD sz) noexcept
@@ -219,7 +218,7 @@ namespace til // Terminal Implementation Library. Also: "Today I Learned"
     }
 };
 
-#ifdef __WEX_COMMON_H__
+#ifdef VERIFY_ARE_EQUAL
 namespace WEX::TestExecution
 {
     template<>

@@ -32,7 +32,7 @@ public:
     //   caller should ensure that `iter` starts where they would like to validate.
     // Arguments:
     // - expectedChar: The character (or characters) we're expecting
-    // - iter: a iterator pointing to the cell we'd like to start validating at.
+    // - iter: an iterator pointing to the cell we'd like to start validating at.
     // - start: the first index in the range we'd like to validate
     // - end: the last index in the range we'd like to validate
     // Return Value:
@@ -62,7 +62,7 @@ public:
     //   expectedString.
     // Arguments:
     // - expectedString: The characters we're expecting
-    // - iter: a iterator pointing to the cell we'd like to start validating at.
+    // - iter: an iterator pointing to the cell we'd like to start validating at.
     // Return Value:
     // - <none>
     static void VerifyExpectedString(std::wstring_view expectedString,
@@ -109,50 +109,6 @@ public:
         return iter;
     };
 
-    // Function Description:
-    // - Replaces all escapes with the printable symbol for that escape
-    //   character. This makes log parsing easier for debugging, as the literal
-    //   escapes won't be written to the console output.
-    // Arguments:
-    // - str: the string to escape.
-    // Return Value:
-    // - A modified version of that string with non-printable characters replaced.
-    static std::string ReplaceEscapes(const std::string& str)
-    {
-        std::string escaped = str;
-        auto replaceFn = [&escaped](const std::string& search, const std::string& replace) {
-            size_t pos = escaped.find(search, 0);
-            while (pos != std::string::npos)
-            {
-                escaped.replace(pos, search.length(), replace);
-                pos = escaped.find(search, pos + replace.length());
-            }
-        };
-        replaceFn("\x1b", "^\x5b"); // ESC
-        replaceFn("\x08", "^\x48"); // BS
-        replaceFn("\x0A", "^\x4A"); // LF
-        replaceFn("\x0D", "^\x4D"); // CR
-        return escaped;
-    }
-
-    // Function Description:
-    // - Replaces all escapes with the printable symbol for that escape
-    //   character. This makes log parsing easier for debugging, as the literal
-    //   escapes won't be written to the console output.
-    // Arguments:
-    // - wstr: the string to escape.
-    // Return Value:
-    // - A modified version of that string with non-printable characters replaced.
-    static std::wstring ReplaceEscapes(const std::wstring& wstr)
-    {
-        std::wstring escaped = wstr;
-        std::replace(escaped.begin(), escaped.end(), L'\x1b', L'\x241b'); // ESC
-        std::replace(escaped.begin(), escaped.end(), L'\x08', L'\x2408'); // BS
-        std::replace(escaped.begin(), escaped.end(), L'\x0A', L'\x240A'); // LF
-        std::replace(escaped.begin(), escaped.end(), L'\x0D', L'\x240D'); // CR
-        return escaped;
-    }
-
     template<class... T>
     static bool VerifyLineContains(TextBufferCellIterator& actual, T&&... expectedContent)
     {
@@ -168,15 +124,19 @@ public:
             auto actualAttrs = actual->TextAttr();
             auto expectedAttrs = expected->TextAttr();
 
-            auto mismatched = (actualChars != expectedChars || actualAttrs != expectedAttrs);
+            auto mismatched = ((!expectedChars.empty() && actualChars != expectedChars) || actualAttrs != expectedAttrs);
             if (mismatched)
             {
                 WEX::Logging::Log::Comment(WEX::Common::NoThrowString().Format(
                     L"Character or attribute at index %d was mismatched", charsProcessed));
             }
 
-            VERIFY_ARE_EQUAL(expectedChars, actualChars);
+            if (!expectedChars.empty())
+            {
+                VERIFY_ARE_EQUAL(expectedChars, actualChars);
+            }
             VERIFY_ARE_EQUAL(expectedAttrs, actualAttrs);
+
             if (mismatched)
             {
                 return false;

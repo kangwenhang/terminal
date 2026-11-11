@@ -4,15 +4,31 @@
 -->
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:local="using:Microsoft.Terminal.Settings.Editor"
+                    xmlns:mtu="using:Microsoft.Terminal.UI"
                     xmlns:muxc="using:Microsoft.UI.Xaml.Controls">
 
-    <!--  Merge SettingContainerStyle here to give every page access to the SettingContainer  -->
+    <!--  Merge SettingsControls styles here to give every page access to them  -->
     <ResourceDictionary.MergedDictionaries>
-        <ResourceDictionary Source="SettingContainerStyle.xaml" />
+        <ResourceDictionary Source="SettingsControlsStyle.xaml" />
     </ResourceDictionary.MergedDictionaries>
 
     <ResourceDictionary.ThemeDictionaries>
         <ResourceDictionary x:Key="Dark">
+            <Style x:Key="SecondaryTextBlockStyle"
+                   TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondary}" />
+            </Style>
+            <SolidColorBrush x:Key="SubgroupHeaderBrush"
+                             Color="{StaticResource TextFillColorSecondary}" />
+            <StaticResource x:Key="SettingContainerErrorSeverityBackgroundBrush"
+                            ResourceKey="SystemFillColorCriticalBackgroundBrush" />
+            <StaticResource x:Key="SettingContainerWarningSeverityBackgroundBrush"
+                            ResourceKey="SystemFillColorCautionBackgroundBrush" />
+            <StaticResource x:Key="SettingContainerErrorSeverityIconBackground"
+                            ResourceKey="SystemFillColorCriticalBrush" />
+            <StaticResource x:Key="SettingContainerWarningSeverityIconBackground"
+                            ResourceKey="SystemFillColorCautionBrush" />
             <SolidColorBrush x:Key="DeleteButtonBackground"
                              Color="{ThemeResource DeleteButtonColor}" />
             <SolidColorBrush x:Key="DeleteButtonBackgroundPointerOver"
@@ -29,6 +45,20 @@
                              Color="#B3FFFFFF" />
         </ResourceDictionary>
         <ResourceDictionary x:Key="Light">
+            <Style x:Key="SecondaryTextBlockStyle"
+                   TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondary}" />
+            </Style>
+            <SolidColorBrush x:Key="SubgroupHeaderBrush"
+                             Color="{StaticResource TextFillColorSecondary}" />
+            <StaticResource x:Key="SettingContainerErrorSeverityBackgroundBrush"
+                            ResourceKey="SystemFillColorCriticalBackgroundBrush" />
+            <StaticResource x:Key="SettingContainerWarningSeverityBackgroundBrush"
+                            ResourceKey="SystemFillColorCautionBackgroundBrush" />
+            <StaticResource x:Key="SettingContainerErrorSeverityIconBackground"
+                            ResourceKey="SystemFillColorCriticalBrush" />
+            <StaticResource x:Key="SettingContainerWarningSeverityIconBackground"
+                            ResourceKey="SystemFillColorCautionBrush" />
             <SolidColorBrush x:Key="DeleteButtonBackground"
                              Color="{ThemeResource DeleteButtonColor}" />
             <SolidColorBrush x:Key="DeleteButtonBackgroundPointerOver"
@@ -45,6 +75,18 @@
                              Color="#B3FFFFFF" />
         </ResourceDictionary>
         <ResourceDictionary x:Key="HighContrast">
+            <Style x:Key="SecondaryTextBlockStyle"
+                   TargetType="TextBlock" />
+            <SolidColorBrush x:Key="SubgroupHeaderBrush"
+                             Color="{ThemeResource SystemColorWindowTextColor}" />
+            <StaticResource x:Key="SettingContainerErrorSeverityBackgroundBrush"
+                            ResourceKey="SystemColorWindowColorBrush" />
+            <StaticResource x:Key="SettingContainerWarningSeverityBackgroundBrush"
+                            ResourceKey="SystemColorWindowColorBrush" />
+            <StaticResource x:Key="SettingContainerErrorSeverityIconBackground"
+                            ResourceKey="SystemColorHighlightColorBrush" />
+            <StaticResource x:Key="SettingContainerWarningSeverityIconBackground"
+                            ResourceKey="SystemColorHighlightColorBrush" />
             <SolidColorBrush x:Key="DeleteButtonBackground"
                              Color="{ThemeResource SystemColorButtonFaceColor}" />
             <SolidColorBrush x:Key="DeleteButtonBackgroundPointerOver"
@@ -60,13 +102,67 @@
         </ResourceDictionary>
     </ResourceDictionary.ThemeDictionaries>
 
+    <!--  Glyphs / sizing for the inline error & warning severity badges (e.g. on Appearances).  -->
+    <x:String x:Key="SettingContainerErrorIconGlyph">&#xF13D;</x:String>
+    <x:String x:Key="SettingContainerWarningIconGlyph">&#xF13C;</x:String>
+    <x:Double x:Key="SettingContainerIconFontSize">16</x:Double>
+
+    <Style x:Key="SettingsPageItemDescriptionStyle"
+           BasedOn="{StaticResource CaptionTextBlockStyle}"
+           TargetType="TextBlock">
+        <Setter Property="Margin" Value="0,0,24,0" />
+        <Setter Property="LineHeight" Value="16" />
+        <Setter Property="Foreground" Value="{ThemeResource SubgroupHeaderBrush}" />
+        <Setter Property="TextWrapping" Value="WrapWholeWords" />
+        <Setter Property="FontFamily" Value="Segoe UI, Segoe Fluent Icons, Segoe MDL2 Assets" />
+    </Style>
+
+    <Style x:Key="SettingContainerCurrentValueTextBlockStyle"
+           BasedOn="{StaticResource SettingsPageItemDescriptionStyle}"
+           TargetType="TextBlock">
+        <Setter Property="MaxWidth" Value="248" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="HorizontalAlignment" Value="Right" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="FontFamily" Value="Segoe UI, Segoe Fluent Icons, Segoe MDL2 Assets" />
+    </Style>
+
+    <local:ColorToBrushConverter x:Key="ColorToBrushConverter" />
+    <local:ColorToStringConverter x:Key="ColorToStringConverter" />
+
     <Color x:Key="DeleteButtonColor">Firebrick</Color>
 
     <x:Double x:Key="StandardIconSize">14.0</x:Double>
-    <Thickness x:Key="StandardIndentMargin">13,0,0,0</Thickness>
     <Thickness x:Key="StandardControlMargin">0,24,0,0</Thickness>
-    <x:Double x:Key="StandardBoxMinWidth">250</x:Double>
+    <x:Double x:Key="StandardBoxMinWidth">248</x:Double>
     <x:Double x:Key="StandardControlMaxWidth">1000</x:Double>
+    <Thickness x:Key="SettingStackMargin">0,0,0,0</Thickness>
+
+    <!-- We're purposefully not providing a DataType here.
+     This is expected to be used with an IReference<Microsoft::Terminal::Core::Color>.
+     We're doing all the data type handling in the used converters.-->
+    <DataTemplate x:Key="ColorPreviewTemplate">
+        <Grid ColumnSpacing="4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Rectangle Grid.Column="0"
+                       Width="12"
+                       Height="12"
+                       VerticalAlignment="Center"
+                       Fill="{Binding Converter={StaticResource ColorToBrushConverter}}"
+                       RadiusX="2"
+                       RadiusY="2" />
+            <TextBlock Grid.Column="1"
+                       Margin="0,0,0,0"
+                       HorizontalAlignment="Right"
+                       VerticalAlignment="Center"
+                       FontFamily="Segoe UI, Segoe Fluent Icons, Segoe MDL2 Assets"
+                       Style="{StaticResource SettingsPageItemDescriptionStyle}"
+                       Text="{Binding Converter={StaticResource ColorToStringConverter}}" />
+        </Grid>
+    </DataTemplate>
 
     <!--
         This is for styling the entire items control used on the
@@ -80,13 +176,15 @@
     <!--  Used to stack a group of settings  -->
     <Style x:Key="SettingsStackStyle"
            TargetType="StackPanel">
-        <Setter Property="Margin" Value="13,0,13,48" />
+        <Setter Property="MaxWidth" Value="{StaticResource StandardControlMaxWidth}" />
+        <Setter Property="Spacing" Value="2" />
     </Style>
 
-    <!--  Used to stack a group of settings inside a pivot  -->
-    <Style x:Key="PivotStackStyle"
+    <!--  Used to lay out a setting's control alongside its reset button  -->
+    <Style x:Key="SettingControlStackStyle"
            TargetType="StackPanel">
-        <Setter Property="Margin" Value="0,0,13,48" />
+        <Setter Property="Orientation" Value="Horizontal" />
+        <Setter Property="Spacing" Value="8" />
     </Style>
 
     <!--  Combo Box  -->
@@ -100,38 +198,88 @@
     <Style x:Key="TextBoxSettingStyle"
            BasedOn="{StaticResource DefaultTextBoxStyle}"
            TargetType="TextBox">
+        <Setter Property="ContextFlyout">
+            <Setter.Value>
+                <mtu:TextMenuFlyout />
+            </Setter.Value>
+        </Setter>
         <Setter Property="MinWidth" Value="{StaticResource StandardBoxMinWidth}" />
         <Setter Property="MaxWidth" Value="400" />
         <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="TextWrapping" Value="NoWrap" />
+        <!--  Value is set below to appease the compiler. The localized resource is used instead.  -->
+        <Setter x:Uid="TextBoxSettingStyle_PlaceholderText" Property="PlaceholderText" Value="None" />
+    </Style>
+
+    <!--  Check Box  -->
+    <Style x:Key="CheckBoxSettingStyle"
+           BasedOn="{StaticResource DefaultCheckBoxStyle}"
+           TargetType="CheckBox">
+        <!--
+            The default style sets a MinWidth and has a 2nd column for content.
+            Our design doesn't use that column because we'd rather place a label on the SettingsCard/Expander.
+            This styling makes adjustments to align the check box with the other controls on the right side of the card.
+        -->
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="HorizontalAlignment" Value="Right" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <!--  Text Block  -->
+    <Style x:Key="TextBlockSettingStyle"
+           BasedOn="{StaticResource BodyTextBlockStyle}"
+           TargetType="TextBlock">
+        <Setter Property="MinWidth" Value="{StaticResource StandardBoxMinWidth}" />
+        <Setter Property="MaxWidth" Value="400" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
 
     <Style x:Key="TextBlockSubHeaderStyle"
+           BasedOn="{StaticResource BodyStrongTextBlockStyle}"
+           TargetType="TextBlock">
+        <Setter Property="MaxWidth" Value="{StaticResource StandardControlMaxWidth}" />
+        <Setter Property="Margin" Value="0,32,0,4" />
+    </Style>
+
+    <Style x:Key="TextBlockSubtitleStyle"
            BasedOn="{StaticResource SubtitleTextBlockStyle}"
            TargetType="TextBlock">
         <Setter Property="MaxWidth" Value="{StaticResource StandardControlMaxWidth}" />
+        <Setter Property="Margin" Value="0,32,0,4" />
     </Style>
 
     <!--  Used for disclaimers  -->
     <Style x:Key="DisclaimerStyle"
            TargetType="TextBlock">
-        <Setter Property="FontStyle" Value="Italic" />
-        <Setter Property="TextWrapping" Value="WrapWholeWords" />
-        <Setter Property="MaxWidth" Value="1000" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="MaxWidth" Value="{StaticResource StandardControlMaxWidth}" />
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+        <Setter Property="Margin" Value="0,0,0,8" />
     </Style>
 
     <!--  Used for flyout messages  -->
     <Style x:Key="CustomFlyoutTextStyle"
            BasedOn="{StaticResource BaseTextBlockStyle}"
            TargetType="TextBlock">
-        <Setter Property="FontWeight" Value="Bold" />
-        <Setter Property="Margin" Value="0,0,0,10" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Margin" Value="0,0,0,8" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <!--  Used for the flyout itself. Removes scroll bar to allow for text wrapping.  -->
+    <Style x:Key="CustomFlyoutPresenterStyle"
+           TargetType="FlyoutPresenter">
+        <Setter Property="ScrollViewer.HorizontalScrollMode" Value="Disabled" />
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
     </Style>
 
     <!--  Number Box  -->
     <Style x:Key="NumberBoxSettingStyle"
            TargetType="muxc:NumberBox">
-        <Setter Property="SpinButtonPlacementMode" Value="Inline" />
+        <Setter Property="SpinButtonPlacementMode" Value="Compact" />
         <Setter Property="HorizontalAlignment" Value="Left" />
     </Style>
 
@@ -145,8 +293,18 @@
     <Style x:Key="BrowseButtonStyle"
            BasedOn="{StaticResource BaseButtonStyle}"
            TargetType="Button">
-        <Setter Property="Margin" Value="10,0,0,0" />
-        <Setter Property="Height" Value="33" />
+        <Setter Property="MinHeight" Value="32" />
+    </Style>
+
+    <!--
+        Implicit style for the per-setting "reset value" button shown next to
+        Profile settings. Matches BrowseButtonStyle (DefaultButtonStyle + centered + 32px
+        min height) so the reset button visually pairs with the adjacent Browse buttons.
+    -->
+    <Style BasedOn="{StaticResource DefaultButtonStyle}"
+           TargetType="local:SettingResetButton">
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="MinHeight" Value="32" />
     </Style>
 
     <!--  Delete button based on Accent button template  -->
@@ -248,28 +406,39 @@
         </Setter>
     </Style>
 
+    <Style x:Key="ExtraSmallButtonStyle"
+           BasedOn="{StaticResource BrowseButtonStyle}"
+           TargetType="Button">
+        <Setter Property="Height" Value="24" />
+        <Setter Property="Width" Value="24" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="MinWidth" Value="0" />
+    </Style>
+
     <Style x:Key="SmallButtonStyle"
            BasedOn="{StaticResource BrowseButtonStyle}"
            TargetType="Button">
-        <Setter Property="Height" Value="33" />
-        <Setter Property="Width" Value="33" />
-        <Setter Property="Padding" Value="5" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Width" Value="32" />
+        <Setter Property="Padding" Value="4" />
     </Style>
 
     <Style x:Key="AccentBrowseButtonStyle"
            BasedOn="{StaticResource AccentButtonStyle}"
            TargetType="Button">
-        <Setter Property="Margin" Value="10,0,0,0" />
+        <Setter Property="Margin" Value="8,0,0,0" />
         <Setter Property="VerticalAlignment" Value="Bottom" />
     </Style>
 
     <Style x:Key="AccentSmallButtonStyle"
            BasedOn="{StaticResource AccentButtonStyle}"
            TargetType="Button">
-        <Setter Property="Margin" Value="10,0,0,0" />
+        <Setter Property="Margin" Value="8,0,0,0" />
         <Setter Property="VerticalAlignment" Value="Bottom" />
-        <Setter Property="Height" Value="33" />
-        <Setter Property="Width" Value="33" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Width" Value="32" />
         <Setter Property="Padding" Value="5" />
     </Style>
 
@@ -281,9 +450,20 @@
         <Setter Property="Padding" Value="5" />
     </Style>
 
+    <Style x:Key="DeleteExtraSmallButtonStyle"
+           BasedOn="{StaticResource DeleteButtonStyle}"
+           TargetType="Button">
+        <Setter Property="Height" Value="24" />
+        <Setter Property="Width" Value="24" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="MinWidth" Value="0" />
+    </Style>
+
     <Style x:Key="IconButtonTextBlockStyle"
            TargetType="TextBlock">
-        <Setter Property="Margin" Value="10,0,0,0" />
+        <Setter Property="Margin" Value="8,0,0,0" />
     </Style>
 
     <Style x:Key="BIAlignmentToggleButtonStyle"
@@ -358,6 +538,91 @@
                                                                        Storyboard.TargetProperty="BorderBrush">
                                             <DiscreteObjectKeyFrame KeyTime="0"
                                                                     Value="{ThemeResource ButtonBorderBrushDisabled}" />
+                                        </ObjectAnimationUsingKeyFrames>
+                                    </Storyboard>
+                                </VisualState>
+                            </VisualStateGroup>
+                        </VisualStateManager.VisualStateGroups>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="ColorToggleButtonStyle"
+           TargetType="ToggleButton">
+        <Setter Property="BackgroundSizing" Value="OuterBorderEdge" />
+        <Setter Property="BorderBrush" Value="{ThemeResource ToggleButtonBorderThemeBrush}" />
+        <Setter Property="BorderThickness" Value="{ThemeResource ToggleButtonBorderThemeThickness}" />
+        <Setter Property="CornerRadius" Value="{ThemeResource ControlCornerRadius}" />
+        <Setter Property="UseSystemFocusVisuals" Value="{StaticResource UseSystemFocusVisuals}" />
+        <Setter Property="FocusVisualMargin" Value="-3" />
+        <Setter Property="Width" Value="32" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Grid>
+                        <Border x:Name="ColorButtonBorder"
+                                BorderBrush="{TemplateBinding Background}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{TemplateBinding CornerRadius}">
+                            <Grid>
+                                <Border x:Name="ColorButtonBackground"
+                                        Background="{TemplateBinding Background}"
+                                        BorderThickness="0" />
+                                <!--  We have to use Binding here! We're trying to do a template binding with a converter, so we have to use the verbose syntax.  -->
+                                <FontIcon Margin="0,0,-1,-1"
+                                          HorizontalAlignment="Right"
+                                          VerticalAlignment="Bottom"
+                                          FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                          FontSize="12"
+                                          Foreground="{TemplateBinding BorderBrush}"
+                                          Glyph="&#xE73D;"
+                                          Visibility="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=IsChecked, Mode=OneWay}" />
+                            </Grid>
+                        </Border>
+                        <VisualStateManager.VisualStateGroups>
+                            <VisualStateGroup x:Name="CommonStates">
+                                <VisualState x:Name="Normal" />
+                                <VisualState x:Name="Disabled" />
+
+                                <VisualState x:Name="PointerOver">
+                                    <Storyboard>
+                                        <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ColorButtonBackground"
+                                                                       Storyboard.TargetProperty="Opacity">
+                                            <DiscreteObjectKeyFrame KeyTime="0"
+                                                                    Value="0.7" />
+                                        </ObjectAnimationUsingKeyFrames>
+                                        <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ColorButtonBorder"
+                                                                       Storyboard.TargetProperty="BorderBrush">
+                                            <DiscreteObjectKeyFrame KeyTime="0"
+                                                                    Value="{Binding Path=BorderBrush, RelativeSource={RelativeSource TemplatedParent}}" />
+                                        </ObjectAnimationUsingKeyFrames>
+                                    </Storyboard>
+                                </VisualState>
+
+                                <VisualState x:Name="Pressed">
+                                    <Storyboard>
+                                        <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ColorButtonBackground"
+                                                                       Storyboard.TargetProperty="Opacity">
+                                            <DiscreteObjectKeyFrame KeyTime="0"
+                                                                    Value="0.5" />
+                                        </ObjectAnimationUsingKeyFrames>
+                                        <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ColorButtonBorder"
+                                                                       Storyboard.TargetProperty="BorderBrush">
+                                            <DiscreteObjectKeyFrame KeyTime="0"
+                                                                    Value="{Binding Path=BorderBrush, RelativeSource={RelativeSource TemplatedParent}}" />
+                                        </ObjectAnimationUsingKeyFrames>
+                                    </Storyboard>
+                                </VisualState>
+
+                                <VisualState x:Name="Checked">
+                                    <Storyboard>
+                                        <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ColorButtonBorder"
+                                                                       Storyboard.TargetProperty="BorderBrush">
+                                            <DiscreteObjectKeyFrame KeyTime="0"
+                                                                    Value="{Binding Path=BorderBrush, RelativeSource={RelativeSource TemplatedParent}}" />
                                         </ObjectAnimationUsingKeyFrames>
                                     </Storyboard>
                                 </VisualState>
@@ -1029,82 +1294,21 @@
         </Setter>
     </Style>
 
-    <Style x:Key="NavigatorButtonStyle"
-           TargetType="Button">
-        <Setter Property="Background" Value="{ThemeResource ExpanderHeaderBackground}" />
-        <Setter Property="MinWidth" Value="{ThemeResource FlyoutThemeMinWidth}" />
-        <Setter Property="MaxWidth" Value="1000" />
-        <Setter Property="MinHeight" Value="64" />
-        <Setter Property="BorderThickness" Value="{ThemeResource ExpanderHeaderBorderThickness}" />
-        <Setter Property="BorderBrush" Value="{ThemeResource ExpanderHeaderBorderBrush}" />
-        <Setter Property="Padding" Value="16,0,8,0" />
-        <Setter Property="Margin" Value="0,4,0,0" />
-        <Setter Property="HorizontalAlignment" Value="Stretch" />
-        <Setter Property="CornerRadius" Value="{ThemeResource ControlCornerRadius}" />
-        <Setter Property="VerticalAlignment" Value="Stretch" />
-        <Setter Property="HorizontalContentAlignment" Value="Left" />
-        <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Style x:Key="NewInfoBadge"
+           TargetType="muxc:InfoBadge">
+        <Setter Property="Padding" Value="5,1,5,2" />
         <Setter Property="Template">
             <Setter.Value>
-                <ControlTemplate TargetType="Button">
-                    <Grid x:Name="Grid"
-                          Padding="{TemplateBinding Padding}"
-                          AutomationProperties.AccessibilityView="Raw"
-                          Background="{TemplateBinding Background}"
-                          BorderBrush="{TemplateBinding BorderBrush}"
-                          BorderThickness="{TemplateBinding BorderThickness}"
-                          CornerRadius="{TemplateBinding CornerRadius}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <ContentPresenter x:Name="ContentPresenter"
-                                          Grid.Column="0"
-                                          HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                          VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
-                                          Content="{TemplateBinding Content}"
-                                          ContentTemplate="{TemplateBinding ContentTemplate}"
-                                          ContentTransitions="{TemplateBinding ContentTransitions}" />
-                        <FontIcon Margin="20,0,8,0"
-                                  HorizontalAlignment="Right"
-                                  FontSize="10"
-                                  FontWeight="Black"
-                                  Glyph="&#xE76C;" />
-
-                        <VisualStateManager.VisualStateGroups>
-                            <VisualStateGroup x:Name="CommonStates">
-                                <VisualState x:Name="Normal" />
-                                <VisualState x:Name="PointerOver">
-                                    <Storyboard>
-                                        <ObjectAnimationUsingKeyFrames Storyboard.TargetName="Grid"
-                                                                       Storyboard.TargetProperty="Background">
-                                            <DiscreteObjectKeyFrame KeyTime="0"
-                                                                    Value="{ThemeResource ToggleButtonBackgroundPointerOver}" />
-                                        </ObjectAnimationUsingKeyFrames>
-                                        <ObjectAnimationUsingKeyFrames Storyboard.TargetName="Grid"
-                                                                       Storyboard.TargetProperty="BorderBrush">
-                                            <DiscreteObjectKeyFrame KeyTime="0"
-                                                                    Value="{ThemeResource ToggleButtonBorderBrushPointerOver}" />
-                                        </ObjectAnimationUsingKeyFrames>
-                                    </Storyboard>
-                                </VisualState>
-                                <VisualState x:Name="Pressed">
-                                    <Storyboard>
-                                        <ObjectAnimationUsingKeyFrames Storyboard.TargetName="Grid"
-                                                                       Storyboard.TargetProperty="Background">
-                                            <DiscreteObjectKeyFrame KeyTime="0"
-                                                                    Value="{ThemeResource ToggleButtonBackgroundPressed}" />
-                                        </ObjectAnimationUsingKeyFrames>
-                                        <ObjectAnimationUsingKeyFrames Storyboard.TargetName="Grid"
-                                                                       Storyboard.TargetProperty="BorderBrush">
-                                            <DiscreteObjectKeyFrame KeyTime="0"
-                                                                    Value="{ThemeResource ToggleButtonBorderBrushPressed}" />
-                                        </ObjectAnimationUsingKeyFrames>
-                                    </Storyboard>
-                                </VisualState>
-                            </VisualStateGroup>
-                        </VisualStateManager.VisualStateGroups>
-                    </Grid>
+                <ControlTemplate TargetType="muxc:InfoBadge">
+                    <Border x:Name="RootGrid"
+                            Padding="{TemplateBinding Padding}"
+                            Background="{TemplateBinding Background}"
+                            CornerRadius="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=TemplateSettings.InfoBadgeCornerRadius}">
+                        <TextBlock x:Uid="NewInfoBadgeTextBlock"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   FontSize="10" />
+                    </Border>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>

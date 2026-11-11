@@ -181,11 +181,6 @@ CATCH_RETURN()
     return S_OK;
 }
 
-[[nodiscard]] HRESULT WddmConEngine::InvalidateSelection(const std::vector<til::rect>& /*rectangles*/) noexcept
-{
-    return S_OK;
-}
-
 [[nodiscard]] HRESULT WddmConEngine::InvalidateScroll(const til::point* const /*pcoordDelta*/) noexcept
 {
     return S_OK;
@@ -194,12 +189,6 @@ CATCH_RETURN()
 [[nodiscard]] HRESULT WddmConEngine::InvalidateAll() noexcept
 {
     return S_OK;
-}
-
-[[nodiscard]] HRESULT WddmConEngine::PrepareForTeardown(_Out_ bool* const pForcePaint) noexcept
-{
-    *pForcePaint = false;
-    return S_FALSE;
 }
 
 [[nodiscard]] HRESULT WddmConEngine::StartPaint() noexcept
@@ -226,7 +215,7 @@ CATCH_RETURN()
 // Return Value:
 // - S_FALSE since we do nothing.
 
-[[nodiscard]] HRESULT WddmConEngine::Present() noexcept
+[[nodiscard]] HRESULT WddmConEngine::Present(HANDLE /*shutdownEvent*/) noexcept
 {
     return S_FALSE;
 }
@@ -258,10 +247,9 @@ CATCH_RETURN()
     return S_OK;
 }
 
-[[nodiscard]] HRESULT WddmConEngine::PaintBufferLine(const gsl::span<const Cluster> clusters,
+[[nodiscard]] HRESULT WddmConEngine::PaintBufferLine(const std::span<const Cluster> clusters,
                                                      const til::point coord,
-                                                     const bool /*trimLeft*/,
-                                                     const bool /*lineWrapped*/) noexcept
+                                                     const bool /*trimLeft*/) noexcept
 {
     try
     {
@@ -269,8 +257,8 @@ CATCH_RETURN()
 
         for (size_t i = 0; i < clusters.size() && i < gsl::narrow_cast<size_t>(_displayWidth); i++)
         {
-            const auto OldChar = &_displayState[coord.Y]->Old[coord.X + i];
-            const auto NewChar = &_displayState[coord.Y]->New[coord.X + i];
+            const auto OldChar = &_displayState[coord.y]->Old[coord.x + i];
+            const auto NewChar = &_displayState[coord.y]->New[coord.x + i];
 
             OldChar->Character = NewChar->Character;
             OldChar->Attribute = NewChar->Attribute;
@@ -279,14 +267,15 @@ CATCH_RETURN()
             NewChar->Attribute = _currentLegacyColorAttribute;
         }
 
-        return WDDMConUpdateDisplay(_hWddmConCtx, _displayState[coord.Y], FALSE);
+        return WDDMConUpdateDisplay(_hWddmConCtx, _displayState[coord.y], FALSE);
     }
     CATCH_RETURN();
 }
 
-[[nodiscard]] HRESULT WddmConEngine::PaintBufferGridLines(GridLineSet const /*lines*/,
-                                                          COLORREF const /*color*/,
-                                                          size_t const /*cchLine*/,
+[[nodiscard]] HRESULT WddmConEngine::PaintBufferGridLines(const GridLineSet /*lines*/,
+                                                          const COLORREF /*gridlineColor*/,
+                                                          const COLORREF /*underlineColor*/,
+                                                          const size_t /*cchLine*/,
                                                           const til::point /*coordTarget*/) noexcept
 {
     return S_OK;
@@ -335,7 +324,7 @@ CATCH_RETURN()
     return S_OK;
 }
 
-[[nodiscard]] HRESULT WddmConEngine::GetProposedFont(const FontInfoDesired& /*fiFontInfoDesired*/,
+[[nodiscard]] HRESULT WddmConEngine::GetProposedFont(const FontInfoDesired& fiFontInfoDesired,
                                                      FontInfo& fiFontInfo,
                                                      const int /*iDpi*/) noexcept
 {
@@ -343,17 +332,18 @@ CATCH_RETURN()
 #pragma warning(suppress : 26447)
     LOG_IF_FAILED(GetFontSize(&coordSize));
 
-    fiFontInfo.SetFromEngine(fiFontInfo.GetFaceName(),
-                             fiFontInfo.GetFamily(),
-                             fiFontInfo.GetWeight(),
-                             fiFontInfo.IsTrueTypeFont(),
-                             coordSize,
+    fiFontInfo.SetFromEngine(fiFontInfoDesired.GetFaceName(),
+                             fiFontInfoDesired.GetFamily(),
+                             fiFontInfoDesired.GetWeight(),
+                             fiFontInfoDesired.GetCodePage(),
+                             coordSize.height * 72.0f / USER_DEFAULT_SCREEN_DPI,
+                             { static_cast<float>(coordSize.width), static_cast<float>(coordSize.height) },
                              coordSize);
 
     return S_OK;
 }
 
-[[nodiscard]] HRESULT WddmConEngine::GetDirtyArea(gsl::span<const til::rect>& area) noexcept
+[[nodiscard]] HRESULT WddmConEngine::GetDirtyArea(std::span<const til::rect>& area) noexcept
 {
     _dirtyArea.bottom = std::max<LONG>(0, _displayHeight);
     _dirtyArea.right = std::max<LONG>(0, _displayWidth);

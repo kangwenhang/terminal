@@ -3,44 +3,46 @@
 
 #pragma once
 
+#include <winrt/Microsoft.Terminal.Settings.Editor.h>
+
 // This macro must be used alongside GETSET_BINDABLE_ENUM_SETTING.
 // Use this in your class's constructor after Initialize_Component().
 // It sorts and initializes the observable list of enum entries with the enum name
 // being its localized name, and also initializes the enum to EnumEntry
 // map that's required to tell XAML what enum value the currently active
 // setting has.
-#define INITIALIZE_BINDABLE_ENUM_SETTING(name, enumMappingsName, enumType, resourceSectionAndType, resourceProperty)                                        \
-    do                                                                                                                                                      \
-    {                                                                                                                                                       \
-        std::vector<winrt::Microsoft::Terminal::Settings::Editor::EnumEntry> name##List;                                                                    \
-        _##name##Map = winrt::single_threaded_map<enumType, winrt::Microsoft::Terminal::Settings::Editor::EnumEntry>();                                     \
-        auto enumMapping##name = winrt::Microsoft::Terminal::Settings::Model::EnumMappings::enumMappingsName();                                             \
-        for (auto [key, value] : enumMapping##name)                                                                                                         \
-        {                                                                                                                                                   \
-            auto enumName = LocalizedNameForEnumName(resourceSectionAndType, key, resourceProperty);                                                        \
-            auto entry = winrt::make<winrt::Microsoft::Terminal::Settings::Editor::implementation::EnumEntry>(enumName, winrt::box_value<enumType>(value)); \
-            name##List.emplace_back(entry);                                                                                                                 \
-            _##name##Map.Insert(value, entry);                                                                                                              \
-        }                                                                                                                                                   \
-        std::sort(name##List.begin(), name##List.end(), EnumEntryComparator<enumType>());                                                                   \
-        _##name##List = winrt::single_threaded_observable_vector<winrt::Microsoft::Terminal::Settings::Editor::EnumEntry>(std::move(name##List));           \
+#define INITIALIZE_BINDABLE_ENUM_SETTING(name, enumMappingsName, enumType, resourceSectionAndType, resourceProperty)                                                                     \
+    do                                                                                                                                                                                   \
+    {                                                                                                                                                                                    \
+        std::vector<winrt::Microsoft::Terminal::Settings::Editor::EnumEntry> name##List;                                                                                                 \
+        _##name##Map = winrt::single_threaded_map<enumType, winrt::Microsoft::Terminal::Settings::Editor::EnumEntry>();                                                                  \
+        auto enumMapping##name = winrt::Microsoft::Terminal::Settings::Model::EnumMappings::enumMappingsName();                                                                          \
+        for (auto [key, value] : enumMapping##name)                                                                                                                                      \
+        {                                                                                                                                                                                \
+            auto enumName = LocalizedNameForEnumName(resourceSectionAndType, key, resourceProperty);                                                                                     \
+            auto entry = winrt::make<winrt::Microsoft::Terminal::Settings::Editor::implementation::EnumEntry>(enumName, winrt::box_value<enumType>(value), static_cast<int32_t>(value)); \
+            name##List.emplace_back(entry);                                                                                                                                              \
+            _##name##Map.Insert(value, entry);                                                                                                                                           \
+        }                                                                                                                                                                                \
+        std::sort(name##List.begin(), name##List.end(), EnumEntryComparator<enumType>());                                                                                                \
+        _##name##List = winrt::single_threaded_observable_vector<winrt::Microsoft::Terminal::Settings::Editor::EnumEntry>(std::move(name##List));                                        \
     } while (0);
 
-#define INITIALIZE_BINDABLE_ENUM_SETTING_REVERSE_ORDER(name, enumMappingsName, enumType, resourceSectionAndType, resourceProperty)                          \
-    do                                                                                                                                                      \
-    {                                                                                                                                                       \
-        std::vector<winrt::Microsoft::Terminal::Settings::Editor::EnumEntry> name##List;                                                                    \
-        _##name##Map = winrt::single_threaded_map<enumType, winrt::Microsoft::Terminal::Settings::Editor::EnumEntry>();                                     \
-        auto enumMapping##name = winrt::Microsoft::Terminal::Settings::Model::EnumMappings::enumMappingsName();                                             \
-        for (auto [key, value] : enumMapping##name)                                                                                                         \
-        {                                                                                                                                                   \
-            auto enumName = LocalizedNameForEnumName(resourceSectionAndType, key, resourceProperty);                                                        \
-            auto entry = winrt::make<winrt::Microsoft::Terminal::Settings::Editor::implementation::EnumEntry>(enumName, winrt::box_value<enumType>(value)); \
-            name##List.emplace_back(entry);                                                                                                                 \
-            _##name##Map.Insert(value, entry);                                                                                                              \
-        }                                                                                                                                                   \
-        std::sort(name##List.begin(), name##List.end(), EnumEntryReverseComparator<enumType>());                                                            \
-        _##name##List = winrt::single_threaded_observable_vector<winrt::Microsoft::Terminal::Settings::Editor::EnumEntry>(std::move(name##List));           \
+#define INITIALIZE_BINDABLE_ENUM_SETTING_REVERSE_ORDER(name, enumMappingsName, enumType, resourceSectionAndType, resourceProperty)                                                       \
+    do                                                                                                                                                                                   \
+    {                                                                                                                                                                                    \
+        std::vector<winrt::Microsoft::Terminal::Settings::Editor::EnumEntry> name##List;                                                                                                 \
+        _##name##Map = winrt::single_threaded_map<enumType, winrt::Microsoft::Terminal::Settings::Editor::EnumEntry>();                                                                  \
+        auto enumMapping##name = winrt::Microsoft::Terminal::Settings::Model::EnumMappings::enumMappingsName();                                                                          \
+        for (auto [key, value] : enumMapping##name)                                                                                                                                      \
+        {                                                                                                                                                                                \
+            auto enumName = LocalizedNameForEnumName(resourceSectionAndType, key, resourceProperty);                                                                                     \
+            auto entry = winrt::make<winrt::Microsoft::Terminal::Settings::Editor::implementation::EnumEntry>(enumName, winrt::box_value<enumType>(value), static_cast<int32_t>(value)); \
+            name##List.emplace_back(entry);                                                                                                                                              \
+            _##name##Map.Insert(value, entry);                                                                                                                                           \
+        }                                                                                                                                                                                \
+        std::sort(name##List.begin(), name##List.end(), EnumEntryReverseComparator<enumType>());                                                                                         \
+        _##name##List = winrt::single_threaded_observable_vector<winrt::Microsoft::Terminal::Settings::Editor::EnumEntry>(std::move(name##List));                                        \
     } while (0);
 
 // This macro must be used alongside INITIALIZE_BINDABLE_ENUM_SETTING.
@@ -74,31 +76,16 @@ private:                                                                        
     winrt::Windows::Foundation::Collections::IObservableVector<winrt::Microsoft::Terminal::Settings::Editor::EnumEntry> _##name##List;   \
     winrt::Windows::Foundation::Collections::IMap<enumType, winrt::Microsoft::Terminal::Settings::Editor::EnumEntry> _##name##Map;
 
-// This macro defines a dependency property for a WinRT class.
-// Use this in your class' header file after declaring it in the idl.
-// Remember to register your dependency property in the respective cpp file.
-#define DEPENDENCY_PROPERTY(type, name)                                  \
-public:                                                                  \
-    static winrt::Windows::UI::Xaml::DependencyProperty name##Property() \
-    {                                                                    \
-        return _##name##Property;                                        \
-    }                                                                    \
-    type name() const                                                    \
-    {                                                                    \
-        return winrt::unbox_value<type>(GetValue(_##name##Property));    \
-    }                                                                    \
-    void name(const type& value)                                         \
-    {                                                                    \
-        SetValue(_##name##Property, winrt::box_value(value));            \
-    }                                                                    \
-                                                                         \
-private:                                                                 \
-    static winrt::Windows::UI::Xaml::DependencyProperty _##name##Property;
-
 namespace winrt::Microsoft::Terminal::Settings
 {
     winrt::hstring GetSelectedItemTag(const winrt::Windows::Foundation::IInspectable& comboBoxAsInspectable);
     winrt::hstring LocalizedNameForEnumName(const std::wstring_view sectionAndType, const std::wstring_view enumValue, const std::wstring_view propertyType);
+    winrt::hstring ColorToHexString(const winrt::Windows::UI::Color& color);
+    winrt::hstring FormatAccessibleName(const std::wstring_view headerResourceKey, const std::wstring_view value);
+    safe_void_coroutine ExpandAncestorsAndBringIntoView(winrt::Windows::UI::Xaml::FrameworkElement root, winrt::Windows::UI::Xaml::Controls::Control control);
+    Editor::KeyChordListener FindKeyChordListener(const winrt::Windows::UI::Xaml::DependencyObject& root);
+    winrt::Windows::UI::Xaml::Controls::Control FindFirstFocusable(const winrt::Windows::UI::Xaml::DependencyObject& root);
+    winrt::Windows::UI::Xaml::Controls::Control ResolveFocusTarget(const winrt::Windows::UI::Xaml::Controls::Control& element);
 }
 
 // BODGY!
@@ -127,7 +114,7 @@ struct HasScrollViewer
                       const winrt::Windows::UI::Xaml::Controls::ScrollViewerViewChangingEventArgs& /*e*/)
     {
         // Inside this struct, we can't get at the XamlRoot() that our subclass
-        // implements. I mean, _we_ can, but when XAML does it's code
+        // implements. I mean, _we_ can, but when XAML does its code
         // generation, _XAML_ won't be able to figure it out.
         //
         // Fortunately for us, we don't need to! The sender is a UIElement, so
@@ -137,4 +124,35 @@ struct HasScrollViewer
             DismissAllPopups(uielem.XamlRoot());
         }
     }
+
+    // Finds the element with the given name and brings it into view
+    void BringIntoViewWhenLoaded(const winrt::hstring elementName)
+    {
+        if (elementName.empty())
+        {
+            return;
+        }
+
+        auto* pThis = static_cast<T*>(this);
+        _loadedRevoker = pThis->Loaded(winrt::auto_revoke, [weakThis{ pThis->get_weak() }, elementName](auto&&, auto&&) {
+            if (auto page{ weakThis.get() })
+            {
+                if (const auto& controlToFocus{ page->FindName(elementName).try_as<winrt::Windows::UI::Xaml::Controls::Control>() })
+                {
+                    // If the named element is a SettingsExpander/SettingsCard with an
+                    // interactive control in its Content, focus that inner control instead.
+                    const auto& target{ winrt::Microsoft::Terminal::Settings::ResolveFocusTarget(controlToFocus) };
+
+                    // We need to wait for the page to be loaded
+                    // or else the call to StartBringIntoView()
+                    // will end up doing nothing.
+                    winrt::Microsoft::Terminal::Settings::ExpandAncestorsAndBringIntoView(page.template as<winrt::Windows::UI::Xaml::FrameworkElement>(), target);
+                }
+                page->_loadedRevoker.revoke();
+            }
+        });
+    }
+
+protected:
+    winrt::Windows::UI::Xaml::FrameworkElement::Loaded_revoker _loadedRevoker;
 };

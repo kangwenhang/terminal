@@ -4,6 +4,7 @@
   ],
   "ContainsFilters": [
     "/.",
+    "/AGENTS.md",
     "/.git/",
     "/obj/",
     "/bin/",
@@ -24,12 +25,15 @@
     "/doc/specs/",
     "/doc/cascadia/",
     "/doc/user-docs/",
-    "/src/tools/MonarchPeasantSample/",
-    "/src/tools/MonarchPeasantPackage/",
     "/src/tools/ansi-color/",
     "/src/tools/ColorTool/",
+    "/src/tools/scratch/",
+    "/src/tools/ConsoleBench/",
+    "/src/tools/schemes-fragment/",
     "/scratch/",
-    "Scratch.sln",
+    "/tools/ReleaseEngineering/",
+    "/tools/GenerateSettingsIndex.ps1",
+    "/policies/"
   ],
   "SuffixFilters": [
     ".dbb",
@@ -46,6 +50,13 @@
     ".rec",
     ".err",
     "XamlStyler.json",
-    ".xlsx"
+    ".xlsx",
+    ".vcxproj",
+    ".vcxproj.filters",
+    ".Build.props",
+    ".Build.targets",
+    ".sln",
+    ".slnx",
+    ".slnf"
   ]
 }

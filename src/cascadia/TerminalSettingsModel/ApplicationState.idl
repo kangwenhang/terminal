@@ -7,9 +7,9 @@ namespace Microsoft.Terminal.Settings.Model
 {
     enum InfoBarMessage
     {
-        CloseOnExitInfo = 0,
-        KeyboardServiceWarning,
-        SetAsDefault,
+        // We need a sentinel value to map deleted keys to, as we can't actually delete them (GH#16874)
+        IgnoredDeprecatedEntry = 0,
+        CloseOnExitInfo,
     };
 
     runtimeclass WindowLayout
@@ -28,18 +28,23 @@ namespace Microsoft.Terminal.Settings.Model
     [default_interface] runtimeclass ApplicationState {
         static ApplicationState SharedInstance();
 
-        void Reload();
+        void Flush();
         void Reset();
 
-        Boolean IsStatePath(String filename);
+        void AppendPersistedWindowLayout(WindowLayout layout);
+        Boolean DismissBadge(String badgeId);
+        Boolean BadgeDismissed(String badgeId);
 
-        Windows.Foundation.Collections.IVector<WindowLayout> PersistedWindowLayouts { get; set; };
+        void SaveWorkspace(String name, WindowLayout layout);
+        Boolean RemoveWorkspace(String name);
+        Boolean RenameWorkspace(String oldName, String newName);
+        WindowLayout TakeWorkspace(String name);
+        Windows.Foundation.Collections.IMapView<String, WindowLayout> AllPersistedWorkspaces();
 
-        Windows.Foundation.Collections.IVector<String> RecentCommands { get; set; };
-
-        Windows.Foundation.Collections.IVector<InfoBarMessage> DismissedMessages { get; set; };
-
-        Windows.Foundation.Collections.IVector<String> AllowedCommandlines { get; set; };
-
+        String SettingsHash;
+        Windows.Foundation.Collections.IVector<WindowLayout> PersistedWindowLayouts;
+        Windows.Foundation.Collections.IVector<String> RecentCommands;
+        Windows.Foundation.Collections.IVector<InfoBarMessage> DismissedMessages;
+        Windows.Foundation.Collections.IVector<String> AllowedCommandlines;
     }
 }

@@ -16,7 +16,7 @@ using namespace Microsoft::Console::Render;
 //      This is an Inclusive rect.
 // Return Value:
 // - S_OK or math failure
-[[nodiscard]] HRESULT GdiEngine::GetDirtyArea(gsl::span<const til::rect>& area) noexcept
+[[nodiscard]] HRESULT GdiEngine::GetDirtyArea(std::span<const til::rect>& area) noexcept
 {
     _invalidCharacters = til::rect{ _psInvalidData.rcPaint }.scale_down(_GetFontSize());
 
@@ -47,7 +47,7 @@ using namespace Microsoft::Console::Render;
             {
                 const int totalWidth = abc.abcA + abc.abcB + abc.abcC;
 
-                isFullWidth = totalWidth > _GetFontSize().X;
+                isFullWidth = totalWidth > _GetFontSize().width;
             }
         }
         else
@@ -55,7 +55,7 @@ using namespace Microsoft::Console::Render;
             auto cpxWidth = 0;
             if (GetCharWidth32W(_hdcMemoryContext, wch, wch, &cpxWidth))
             {
-                isFullWidth = cpxWidth > _GetFontSize().X;
+                isFullWidth = cpxWidth > _GetFontSize().width;
             }
         }
     }
@@ -68,30 +68,6 @@ using namespace Microsoft::Console::Render;
 
     *pResult = isFullWidth;
     return S_OK;
-}
-
-// Routine Description:
-// - Scales the given pixel measurement up from the typical system DPI (generally 96) to whatever the given DPI is.
-// Arguments:
-// - iPx - Pixel length measurement.
-// - iDpi - Given DPI scalar value
-// Return Value:
-// - Pixel measurement scaled against the given DPI scalar.
-int GdiEngine::s_ScaleByDpi(const int iPx, const int iDpi)
-{
-    return MulDiv(iPx, iDpi, s_iBaseDpi);
-}
-
-// Routine Description:
-// - Shrinks the given pixel measurement down from whatever the given DPI is to the typical system DPI (generally 96).
-// Arguments:
-// - iPx - Pixel measurement scaled against the given DPI.
-// - iDpi - Given DPI for pixel scaling
-// Return Value:
-// - Pixel length measurement.
-int GdiEngine::s_ShrinkByDpi(const int iPx, const int iDpi)
-{
-    return MulDiv(iPx, s_iBaseDpi, iDpi);
 }
 
 // Routine Description:
@@ -129,8 +105,8 @@ til::size GdiEngine::_GetInvalidRectSize() const
 til::size GdiEngine::_GetRectSize(const RECT* const pRect) const
 {
     til::size sz;
-    sz.cx = pRect->right - pRect->left;
-    sz.cy = pRect->bottom - pRect->top;
+    sz.width = pRect->right - pRect->left;
+    sz.height = pRect->bottom - pRect->top;
 
     return sz;
 }

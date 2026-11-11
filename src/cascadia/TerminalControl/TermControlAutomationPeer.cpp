@@ -3,10 +3,8 @@
 
 #include "pch.h"
 #include <UIAutomationCore.h>
-#include <LibraryResources.h>
 #include "TermControlAutomationPeer.h"
 #include "TermControl.h"
-#include "TermControlAutomationPeer.g.cpp"
 
 #include "XamlUiaTextRange.h"
 #include "../types/UiaTracing.h"
@@ -52,7 +50,7 @@ static std::wstring Sanitize(std::wstring_view text)
 // Arguments:
 // - text: the string we're validating
 // Return Value:
-// - true, if the text is readable. false, otherwise.
+// - true, if the text is readable; otherwise, false.
 static constexpr bool IsReadable(std::wstring_view text)
 {
     for (const auto c : text)
@@ -67,44 +65,12 @@ static constexpr bool IsReadable(std::wstring_view text)
 
 namespace winrt::Microsoft::Terminal::Control::implementation
 {
-    TermControlAutomationPeer::TermControlAutomationPeer(TermControl* owner,
-                                                         const Core::Padding padding,
-                                                         Control::InteractivityAutomationPeer impl) :
-        TermControlAutomationPeerT<TermControlAutomationPeer>(*owner), // pass owner to FrameworkElementAutomationPeer
-        _termControl{ owner },
-        _contentAutomationPeer{ impl }
+    TermControlAutomationPeer::TermControlAutomationPeer(winrt::com_ptr<TermControl> owner) :
+        FrameworkElementAutomationPeerT(*owner.get()), // pass owner to FrameworkElementAutomationPeer
+        _termControl{ owner }
     {
-        UpdateControlBounds();
-        SetControlPadding(padding);
-        // Listen for UIA signalling events from the implementation. We need to
-        // be the one to actually raise these automation events, so they go
-        // through the UI tree correctly.
-        _contentAutomationPeer.SelectionChanged([this](auto&&, auto&&) { SignalSelectionChanged(); });
-        _contentAutomationPeer.TextChanged([this](auto&&, auto&&) { SignalTextChanged(); });
-        _contentAutomationPeer.CursorChanged([this](auto&&, auto&&) { SignalCursorChanged(); });
-        _contentAutomationPeer.NewOutput([this](auto&&, hstring newOutput) { NotifyNewOutput(newOutput); });
-        _contentAutomationPeer.ParentProvider(*this);
+        THROW_IF_FAILED(::Microsoft::WRL::MakeAndInitialize<::Microsoft::Terminal::TermControlUiaProvider>(&_uiaProvider, owner->_core->GetRenderData(), this));
     };
-
-    // Method Description:
-    // - Inform the interactivity layer about the bounds of the control.
-    //   IControlAccessibilityInfo needs to know this information, but it cannot
-    //   ask us directly.
-    // Arguments:
-    // - <none>
-    // Return Value:
-    // - <none>
-    void TermControlAutomationPeer::UpdateControlBounds()
-    {
-        // FrameworkElementAutomationPeer has this great GetBoundingRectangle
-        // method that's seemingly impossible to recreate just from the
-        // UserControl itself. Weird. But we can use it handily here!
-        _contentAutomationPeer.SetControlBounds(GetBoundingRectangle());
-    }
-    void TermControlAutomationPeer::SetControlPadding(const Core::Padding padding)
-    {
-        _contentAutomationPeer.SetControlPadding(padding);
-    }
 
     void TermControlAutomationPeer::RecordKeyEvent(const WORD vkey)
     {
@@ -112,9 +78,16 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         {
             if (const auto keyEventChar{ gsl::narrow_cast<wchar_t>(charCode) }; IsReadable({ &keyEventChar, 1 }))
             {
-                _keyEvents.emplace_back(keyEventChar);
+                _keyEvents.lock()->emplace_back(keyEventChar);
             }
         }
+    }
+
+    void TermControlAutomationPeer::Close()
+    {
+        // GH#13978: If the TermControl has already been removed from the UI tree, XAML might run into weird bugs.
+        // This will prevent the `dispatcher.RunAsync` calls below from raising UIA events on the main thread.
+        _termControl = {};
     }
 
     // Method Description:
@@ -134,8 +107,11 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         dispatcher.RunAsync(Windows::UI::Core::CoreDispatcherPriority::Normal, [weakThis{ get_weak() }]() {
             if (auto strongThis{ weakThis.get() })
             {
-                // The event that is raised when the text selection is modified.
-                strongThis->RaiseAutomationEvent(AutomationEvents::TextPatternOnTextSelectionChanged);
+                if (auto control{ strongThis->_termControl.get() })
+                {
+                    // The event that is raised when the text selection is modified.
+                    strongThis->RaiseAutomationEvent(AutomationEvents::TextPatternOnTextSelectionChanged);
+                }
             }
         });
     }
@@ -157,8 +133,11 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         dispatcher.RunAsync(Windows::UI::Core::CoreDispatcherPriority::Normal, [weakThis{ get_weak() }]() {
             if (auto strongThis{ weakThis.get() })
             {
-                // The event that is raised when textual content is modified.
-                strongThis->RaiseAutomationEvent(AutomationEvents::TextPatternOnTextChanged);
+                if (auto control{ strongThis->_termControl.get() })
+                {
+                    // The event that is raised when textual content is modified.
+                    strongThis->RaiseAutomationEvent(AutomationEvents::TextPatternOnTextChanged);
+                }
             }
         });
     }
@@ -180,40 +159,46 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         dispatcher.RunAsync(Windows::UI::Core::CoreDispatcherPriority::Normal, [weakThis{ get_weak() }]() {
             if (auto strongThis{ weakThis.get() })
             {
-                // The event that is raised when the text was changed in an edit control.
-                // Do NOT fire a TextEditTextChanged. Generally, an app on the other side
-                //    will expect more information. Though you can dispatch that event
-                //    on its own, it may result in a nullptr exception on the other side
-                //    because no additional information was provided. Crashing the screen
-                //    reader.
-                strongThis->RaiseAutomationEvent(AutomationEvents::TextPatternOnTextSelectionChanged);
+                if (auto control{ strongThis->_termControl.get() })
+                {
+                    // The event that is raised when the text was changed in an edit control.
+                    // Do NOT fire a TextEditTextChanged. Generally, an app on the other side
+                    //    will expect more information. Though you can dispatch that event
+                    //    on its own, it may result in a nullptr exception on the other side
+                    //    because no additional information was provided. Crashing the screen
+                    //    reader.
+                    strongThis->RaiseAutomationEvent(AutomationEvents::TextPatternOnTextSelectionChanged);
+                }
             }
         });
     }
 
     void TermControlAutomationPeer::NotifyNewOutput(std::wstring_view newOutput)
     {
-        // Try to suppress any events (or event data)
-        // that is just the keypress the user made
         auto sanitized{ Sanitize(newOutput) };
-        while (!_keyEvents.empty() && IsReadable(sanitized))
+        // Try to suppress any events (or event data)
+        // that are just the keypresses that the user made
         {
-            if (til::toupper_ascii(sanitized.front()) == _keyEvents.front())
+            auto keyEvents = _keyEvents.lock();
+            while (!keyEvents->empty() && IsReadable(sanitized))
             {
-                // the key event's character (i.e. the "A" key) matches
-                // the output character (i.e. "a" or "A" text).
-                // We can assume that the output character resulted from
-                // the pressed key, so we can ignore it.
-                sanitized = sanitized.substr(1);
-                _keyEvents.pop_front();
-            }
-            else
-            {
-                // The output doesn't match,
-                // so clear the input stack and
-                // move on to fire the event.
-                _keyEvents.clear();
-                break;
+                if (til::toupper_ascii(sanitized.front()) == keyEvents->front())
+                {
+                    // the key event's character (i.e. the "A" key) matches
+                    // the output character (i.e. "a" or "A" text).
+                    // We can assume that the output character resulted from
+                    // the pressed key, so we can ignore it.
+                    sanitized = sanitized.substr(1);
+                    keyEvents->pop_front();
+                }
+                else
+                {
+                    // The output doesn't match,
+                    // so clear the input stack and
+                    // move on to fire the event.
+                    keyEvents->clear();
+                    break;
+                }
             }
         }
 
@@ -236,14 +221,17 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         dispatcher.RunAsync(Windows::UI::Core::CoreDispatcherPriority::Normal, [weakThis{ get_weak() }, sanitizedCopy{ hstring{ sanitized } }]() {
             if (auto strongThis{ weakThis.get() })
             {
-                try
+                if (auto control{ strongThis->_termControl.get() })
                 {
-                    strongThis->RaiseNotificationEvent(AutomationNotificationKind::ActionCompleted,
-                                                       AutomationNotificationProcessing::All,
-                                                       sanitizedCopy,
-                                                       L"TerminalTextOutput");
+                    try
+                    {
+                        strongThis->RaiseNotificationEvent(AutomationNotificationKind::ActionCompleted,
+                                                           AutomationNotificationProcessing::All,
+                                                           sanitizedCopy,
+                                                           L"TerminalTextOutput");
+                    }
+                    CATCH_LOG();
                 }
-                CATCH_LOG();
             }
         });
     }
@@ -283,18 +271,30 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
     hstring TermControlAutomationPeer::GetNameCore() const
     {
-        // fallback to title if profile name is empty
-        auto profileName = _termControl->GetProfileName();
-        if (profileName.empty())
+        // fall back to title if profile name is empty
+        if (auto control{ _termControl.get() })
         {
-            return _termControl->Title();
+            const auto originalName = control->GetStartingTitle();
+            if (originalName.empty())
+            {
+                return control->Title();
+            }
+            else
+            {
+                return originalName;
+            }
         }
-        return profileName;
+
+        return {};
     }
 
     hstring TermControlAutomationPeer::GetHelpTextCore() const
     {
-        return _termControl->Title();
+        if (const auto control{ _termControl.get() })
+        {
+            return control->Title();
+        }
+        return {};
     }
 
     AutomationLiveSetting TermControlAutomationPeer::GetLiveSettingCore() const
@@ -305,33 +305,126 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 #pragma region ITextProvider
     com_array<XamlAutomation::ITextRangeProvider> TermControlAutomationPeer::GetSelection()
     {
-        return _contentAutomationPeer.GetSelection();
+        SAFEARRAY* pReturnVal;
+        THROW_IF_FAILED(_uiaProvider->GetSelection(&pReturnVal));
+        return WrapArrayOfTextRangeProviders(pReturnVal);
     }
 
     com_array<XamlAutomation::ITextRangeProvider> TermControlAutomationPeer::GetVisibleRanges()
     {
-        return _contentAutomationPeer.GetVisibleRanges();
+        SAFEARRAY* pReturnVal;
+        THROW_IF_FAILED(_uiaProvider->GetVisibleRanges(&pReturnVal));
+        return WrapArrayOfTextRangeProviders(pReturnVal);
     }
 
-    XamlAutomation::ITextRangeProvider TermControlAutomationPeer::RangeFromChild(XamlAutomation::IRawElementProviderSimple childElement)
+    XamlAutomation::ITextRangeProvider TermControlAutomationPeer::RangeFromChild(XamlAutomation::IRawElementProviderSimple /*childElement*/)
     {
-        return _contentAutomationPeer.RangeFromChild(childElement);
+        UIA::ITextRangeProvider* returnVal;
+        // ScreenInfoUiaProvider doesn't actually use parameter, so just pass in nullptr
+        THROW_IF_FAILED(_uiaProvider->RangeFromChild(/* IRawElementProviderSimple */ nullptr,
+                                                     &returnVal));
+        return _CreateXamlUiaTextRange(returnVal);
     }
 
     XamlAutomation::ITextRangeProvider TermControlAutomationPeer::RangeFromPoint(Windows::Foundation::Point screenLocation)
     {
-        return _contentAutomationPeer.RangeFromPoint(screenLocation);
+        UIA::ITextRangeProvider* returnVal;
+        THROW_IF_FAILED(_uiaProvider->RangeFromPoint({ screenLocation.X, screenLocation.Y }, &returnVal));
+        return _CreateXamlUiaTextRange(returnVal);
     }
 
     XamlAutomation::ITextRangeProvider TermControlAutomationPeer::DocumentRange()
     {
-        return _contentAutomationPeer.DocumentRange();
+        UIA::ITextRangeProvider* returnVal;
+        THROW_IF_FAILED(_uiaProvider->get_DocumentRange(&returnVal));
+        return _CreateXamlUiaTextRange(returnVal);
     }
 
     XamlAutomation::SupportedTextSelection TermControlAutomationPeer::SupportedTextSelection()
     {
-        return _contentAutomationPeer.SupportedTextSelection();
+        UIA::SupportedTextSelection returnVal;
+        THROW_IF_FAILED(_uiaProvider->get_SupportedTextSelection(&returnVal));
+        return static_cast<XamlAutomation::SupportedTextSelection>(returnVal);
     }
 
 #pragma endregion
+
+#pragma region IControlAccessibilityInfo
+    til::size TermControlAutomationPeer::GetFontSize() const noexcept
+    {
+        if (const auto control{ _termControl.get() })
+        {
+            return { til::math::rounding, control->_core->FontSize() };
+        }
+        return {};
+    }
+
+    til::rect TermControlAutomationPeer::GetBounds() const noexcept
+    {
+        return { til::math::rounding, GetBoundingRectangle() };
+    }
+
+    HRESULT TermControlAutomationPeer::GetHostUiaProvider(IRawElementProviderSimple** provider)
+    {
+        RETURN_HR_IF(E_INVALIDARG, provider == nullptr);
+        *provider = nullptr;
+
+        return S_OK;
+    }
+
+    til::rect TermControlAutomationPeer::GetPadding() const noexcept
+    {
+        if (const auto control{ _termControl.get() })
+        {
+            const auto padding{ control->GetPadding() };
+            return {
+                til::math::rounding,
+                padding.Left,
+                padding.Top,
+                padding.Right,
+                padding.Bottom,
+            };
+        }
+        return {};
+    }
+
+    void TermControlAutomationPeer::ChangeViewport(const til::inclusive_rect& NewWindow)
+    {
+        if (const auto control{ _termControl.get() })
+        {
+            control->_interactivity->UpdateScrollbar(static_cast<float>(NewWindow.top));
+        }
+    }
+#pragma endregion
+
+    XamlAutomation::ITextRangeProvider TermControlAutomationPeer::_CreateXamlUiaTextRange(UIA::ITextRangeProvider* returnVal) const
+    {
+        const auto provider = ProviderFromPeer(*this);
+        const auto xutr = winrt::make_self<XamlUiaTextRange>(returnVal, provider);
+        return xutr.as<XamlAutomation::ITextRangeProvider>();
+    };
+
+    // Method Description:
+    // - extracts the UiaTextRanges from the SAFEARRAY and converts them to Xaml ITextRangeProviders
+    // Arguments:
+    // - SAFEARRAY of UIA::UiaTextRange (ITextRangeProviders)
+    // Return Value:
+    // - com_array of Xaml Wrapped UiaTextRange (ITextRangeProviders)
+    com_array<XamlAutomation::ITextRangeProvider> TermControlAutomationPeer::WrapArrayOfTextRangeProviders(SAFEARRAY* textRanges)
+    {
+        // transfer ownership of UiaTextRanges to this new vector
+        auto providers = SafeArrayToOwningVector<::Microsoft::Terminal::TermControlUiaTextRange>(textRanges);
+        const auto len = gsl::narrow<uint32_t>(providers.size());
+        com_array<XamlAutomation::ITextRangeProvider> result{ len };
+
+        for (uint32_t i = 0; i < len; ++i)
+        {
+            if (auto xutr = _CreateXamlUiaTextRange(providers[i].detach()))
+            {
+                result[i] = std::move(xutr);
+            }
+        }
+
+        return result;
+    }
 }
